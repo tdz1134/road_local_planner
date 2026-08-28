@@ -6,6 +6,8 @@
 
 namespace rlp {
 namespace planner {
+
+// ── 内部辅助（仅本文件使用，不对外暴露）──────────────────────────
 namespace {
 constexpr double kInfDist = std::numeric_limits<double>::infinity();
 
@@ -21,6 +23,8 @@ double threePointCurvature(const Point2D& a, const Point2D& b, const Point2D& c)
 }
 
 }  // namespace
+
+// ── 公共接口（在 safety_checker.h 中声明）────────────────────────
 
 SafetyChecker::SafetyChecker(const PlannerParams& p) : p_(p) {}
 

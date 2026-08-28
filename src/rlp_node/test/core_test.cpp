@@ -14,6 +14,7 @@ using rlp::planner::PlannerInput;
 using rlp::road::BoundarySet;
 using rlp::road::BoundaryState;
 
+// ── 测试辅助（仅本文件使用）──────────────────────────────────────
 namespace {
 
 BoundarySet straightRoad(bool left, bool right) {
@@ -42,6 +43,8 @@ void check(bool cond, const std::string& name) {
 }
 
 }  // namespace
+
+// ── 测试入口 ─────────────────────────────────────────────────────
 
 int main() {
   PlannerParams p;

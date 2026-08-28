@@ -5,9 +5,13 @@
 
 namespace rlp {
 namespace road {
+
+// ── 内部辅助（仅本文件使用，不对外暴露）──────────────────────────
 namespace {
 constexpr double kEmaAlpha = 0.5;  // 路宽平滑系数，TODO: 提为参数
 }
+
+// ── 公共接口（在 boundary_manager.h 中声明）──────────────────────
 
 BoundaryManager::BoundaryManager(const PlannerParams& p) : p_(p) {}
 

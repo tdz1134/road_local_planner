@@ -7,6 +7,8 @@
 
 namespace rlp {
 namespace planner {
+
+// ── 内部辅助（仅本文件使用，不对外暴露）──────────────────────────
 namespace {
 
 double normalizeAngle(double a) {
@@ -23,6 +25,8 @@ std::vector<Point2D> pathToPoints(const Path& path) {
 }
 
 }  // namespace
+
+// ── 公共接口（在 cost_evaluator.h 中声明）────────────────────────
 
 CostEvaluator::CostEvaluator(const PlannerParams& p) : p_(p) {}
 

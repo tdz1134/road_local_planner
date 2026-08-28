@@ -8,6 +8,8 @@
 namespace rlp {
 namespace planner {
 namespace candidate_gen {
+
+// ── 内部辅助（仅本文件使用，不对外暴露）──────────────────────────
 namespace {
 
 // 在折线前拼接车辆原点 (0,0)，生成完整 Path（v1：直接连线，
@@ -24,6 +26,8 @@ Path prependOrigin(const std::vector<Point2D>& pts) {
 }
 
 }  // namespace
+
+// ── 公共接口（在 candidate_gen.h 中声明）────────────────────────
 
 double lookaheadLength(const PlannerParams& p, double speed) {
   return std::max(p.min_lookahead, speed * p.lookahead_time);

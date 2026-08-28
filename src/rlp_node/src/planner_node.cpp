@@ -7,6 +7,8 @@
 #include <tf2/utils.h>
 
 namespace rlp {
+
+// ── 内部辅助（仅本文件使用，不对外暴露）──────────────────────────
 namespace {
 
 rlp::GridMap toCoreGrid(const nav_msgs::OccupancyGrid& m) {
@@ -34,6 +36,8 @@ double normalizeAngle(double a) {
 }
 
 }  // namespace
+
+// ── 公共接口（在 planner_node.h 中声明）──────────────────────────
 
 #define RLP_GET_PARAM(name) pnh_.param(#name, params_.name, params_.name)
 
