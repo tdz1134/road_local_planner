@@ -66,6 +66,11 @@ struct PlannerParams {
   std::vector<double> lateral_offsets = {0.0, -1.0, 1.0};
   int n_goal_bearings = 5;
   double goal_fan_deg = 25.0;
+  // 各规划方法的候选生成算法选择（按名字匹配已注册算法；
+  // 未知名字回退到第一个注册的默认算法。可选值见各方法构造函数）
+  std::string follow_alg = "offset";
+  std::string search_alg = "hybrid";
+  std::string free_alg = "fan";
   // 边界 / 走廊
   double boundary_timeout = 0.5;
   double corridor_hold_max = 3.0;

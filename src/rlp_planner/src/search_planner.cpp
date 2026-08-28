@@ -1,23 +1,14 @@
 #include "rlp_planner/search_planner.h"
 
-#include "rlp_planner/candidate_gen.h"
+#include "rlp_planner/algorithms/search_hybrid.h"
 
 namespace rlp {
 namespace planner {
 
-std::vector<Path> SearchPlanner::candidates(const PlanningContext& ctx) const {
-  const double la = candidate_gen::lookaheadLength(p_, ctx.input->current_speed);
-  std::vector<Path> out;
-  // 路面优先：走廊偏移族（若走廊有效）
-  if (ctx.corridor != nullptr && ctx.corridor->valid()) {
-    out = candidate_gen::corridorFamily(p_, *ctx.corridor, la);
-  }
-  // 终点引导：朝终点扇形族（终点在图外 → 虚拟目标点方向）
-  if (ctx.input->goal_valid) {
-    auto fan = candidate_gen::goalFan(p_, ctx.input->goal, la);
-    out.insert(out.end(), fan.begin(), fan.end());
-  }
-  return out;
+SearchPlanner::SearchPlanner(const PlannerParams& p) : p_(p) {
+  // search 方法可用的候选生成算法；第一个注册的为默认算法（参数写错时回退到它）。
+  // 新增算法：实现 MethodAlgorithm 后在此 addAlgorithm 注册，参数 search_alg 配置其名字。
+  addAlgorithm(std::make_unique<SearchHybridAlg>(p));
 }
 
 }  // namespace planner

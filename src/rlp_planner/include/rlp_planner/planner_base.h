@@ -33,7 +33,8 @@ struct PlanResult {
   road::BoundaryState boundary_state = road::BoundaryState::MISSING_TIMEOUT;
   double corridor_confidence = 0.0;
   bool emergency_stop = false;
-  std::string method;  // 实际使用的规划方法名
+  std::string method;     // 实际使用的规划方法名（follow/search/free）
+  std::string algorithm;  // 方法内部实际使用的候选生成算法名（调试用）
   std::string reason;
 };
 
@@ -51,6 +52,8 @@ class PlannerBase {
   virtual ~PlannerBase() = default;
   virtual PlanMode mode() const = 0;
   virtual const char* name() const = 0;
+  // 方法内部当前生效的候选生成算法名（仅带算法管理的方法类覆盖，调试用）
+  virtual const char* algorithm() const { return ""; }
   // 基于当前道路情况生成候选路径；不适用时返回空（上层停车）
   virtual std::vector<Path> candidates(const PlanningContext& ctx) const = 0;
 };

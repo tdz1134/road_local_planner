@@ -79,6 +79,9 @@ void PlannerNode::loadParams() {
   RLP_GET_PARAM(lateral_offsets);
   RLP_GET_PARAM(n_goal_bearings);
   RLP_GET_PARAM(goal_fan_deg);
+  RLP_GET_PARAM(follow_alg);
+  RLP_GET_PARAM(search_alg);
+  RLP_GET_PARAM(free_alg);
   RLP_GET_PARAM(boundary_timeout);
   RLP_GET_PARAM(corridor_hold_max);
   RLP_GET_PARAM(corridor_inflate_rate);
@@ -217,7 +220,8 @@ void PlannerNode::onTimer(const ros::TimerEvent& event) {
   // ---- 状态 ----
   std_msgs::String st;
   std::ostringstream oss;
-  oss << "method=" << res.method << " mode=" << modeName(res.mode)
+  oss << "method=" << res.method << " alg=" << res.algorithm
+      << " mode=" << modeName(res.mode)
       << " boundary=" << road::boundaryStateName(res.boundary_state)
       << " conf=" << res.corridor_confidence << " v_rec=" << res.recommended_speed
       << " estop=" << (res.emergency_stop ? 1 : 0) << " reason=" << res.reason;

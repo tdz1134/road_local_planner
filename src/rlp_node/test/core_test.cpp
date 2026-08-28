@@ -53,9 +53,10 @@ int main() {
   {
     PlannerCore c(p);
     auto r = c.plan(makeInput(straightRoad(true, true), 1.0, 0.2));
-    check(r.mode == PlanMode::FOLLOW && r.method == "follow" && !r.emergency_stop &&
+    check(r.mode == PlanMode::FOLLOW && r.method == "follow" &&
+              std::string(r.algorithm) == "offset" && !r.emergency_stop &&
               r.path.size() > 2,
-          "both sides, poor loc -> follow planner feasible");
+          "both sides, poor loc -> follow planner (offset alg) feasible");
   }
 
   // 2) 单侧缺失：先用双侧建立路宽记忆，再只给左边界 → LEFT_ONLY 走廊仍有效

@@ -18,6 +18,11 @@ lateral_offsets: [0.0, -1.0, 1.0]   # 走廊内横向偏移候选 m
 n_goal_bearings: 5          # SEARCH 模式朝终点扇形候选数
 goal_fan_deg: 25.0          # 扇形半角 deg
 
+# ---- 各方法的候选生成算法选择（未知名字回退到默认算法）----
+follow_alg: offset          # follow: offset=走廊横向偏移族
+search_alg: hybrid          # search: hybrid=走廊偏移族+终点扇形族
+free_alg: fan               # free:   fan=终点方向扇形直线族
+
 # ---- 边界 / 走廊 ----
 boundary_timeout: 0.5       # 单侧边界超时判失效 s
 corridor_hold_max: 3.0      # 双侧缺失后走廊记忆保持时长 s，超时判 MISSING_TIMEOUT

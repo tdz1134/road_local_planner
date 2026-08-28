@@ -49,6 +49,7 @@ PlanResult PlannerCore::plan(const PlannerInput& in) {
   result.boundary_state = st;
   result.corridor_confidence = corridor.confidence;
   result.method = method->name();
+  result.algorithm = method->algorithm();
 
   // ---- 3. 方法生成候选 + 代价评分 ----
   const double margin =

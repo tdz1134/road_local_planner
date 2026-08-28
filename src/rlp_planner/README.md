@@ -31,13 +31,36 @@
 - **`PlanningContext`** — 传给各规划方法的上下文（输入指针、走廊指针、安全边距、上一周期路径）
 - **`PlannerBase`** — 规划方法抽象接口：`mode()`、`name()`、`candidates(ctx)`
 
+### method_algorithm.h — 算法层
+
+规划方法（方法层）与候选生成算法（算法层）两级分离：
+
+- **`MethodAlgorithm`** — 候选生成算法接口：`name()` + `candidates(ctx)`。每个算法独立实现，便于单独替换与对比实验
+- **`MethodPlannerBase`** — 带算法管理的方法基类：内部注册多个算法，运行时按参数（`PlannerParams::follow_alg / search_alg / free_alg`）按名字选择一个生效；未知名字回退到第一个注册的默认算法
+
+分层关系：
+
+```
+PlannerRouter → PlannerBase 方法（follow/search/free，由道路+定位情况路由）
+                    └── MethodPlannerBase（注册多个算法，参数切换）
+                          └── MethodAlgorithm（offset / hybrid / fan / 未来的 A、B、C...）
+```
+
 ### 三种规划方法
 
-| 类 | 适用条件 | 策略 |
-|----|----------|------|
-| `FollowPlanner` | 有走廊 + 定位差 | 走廊内横向偏移族采样，进度 = 沿中线弧长，完全忽略全局终点 |
-| `SearchPlanner` | 有走廊 + 定位好 | 走廊偏移族（路面优先）+ 朝终点扇形族，由代价函数权衡"沿路"与"抄近路" |
-| `FreePlanner` | 无走廊 + 定位好 | 纯终点方向扇形直线族，依赖栅格避障 |
+| 类 | 适用条件 | 默认算法 | 策略 |
+|----|----------|----------|------|
+| `FollowPlanner` | 有走廊 + 定位差 | `offset` | 走廊内横向偏移族采样，进度 = 沿中线弧长，完全忽略全局终点 |
+| `SearchPlanner` | 有走廊 + 定位好 | `hybrid` | 走廊偏移族（路面优先）+ 朝终点扇形族，由代价函数权衡"沿路"与"抄近路" |
+| `FreePlanner` | 无走廊 + 定位好 | `fan` | 纯终点方向扇形直线族，依赖栅格避障 |
+
+### algorithms/ — 各方法的候选生成算法实现
+
+| 算法类 | 名字 | 所属方法 | 说明 |
+|--------|------|----------|------|
+| `FollowOffsetAlg` | `offset` | follow | 走廊中线裁剪后按 `lateral_offsets` 横向偏移成族 |
+| `SearchHybridAlg` | `hybrid` | search | 走廊偏移族 + 终点扇形族合并输出 |
+| `FreeFanAlg` | `fan` | free | 终点方向扇形直线族 |
 
 ### planner_router — 方法路由
 
@@ -99,6 +122,17 @@
 ```
 
 内部维护跨周期状态：上一周期路径（用于一致性代价和 warm start）。
+
+## 扩展：为某个方法新增候选生成算法
+
+以给 follow 方法新增算法 "A" 为例，共 4 步：
+
+1. **实现算法类**：新建 `include/rlp_planner/algorithms/follow_a.h` 与 `src/algorithms/follow_a.cpp`，继承 `MethodAlgorithm`，实现 `name()`（返回 `"A"`）与 `candidates(ctx)`（不适用时返回空）。可复用 `candidate_gen` 中的生成原语
+2. **注册**：在 `FollowPlanner` 构造函数中 `addAlgorithm(std::make_unique<FollowAAlg>(p))`
+3. **构建**：把新 `.cpp` 加入 `CMakeLists.txt` 的 `add_library` 列表
+4. **启用**：`params.yaml` 中设 `follow_alg: A`（不配置或名字写错则回退默认算法；`~status` 话题会输出实际生效的算法名，便于确认）
+
+方法层（路由、代价、安全校验）无需任何改动；新旧算法共存，改参数即可对比实验。
 
 ## 依赖
 

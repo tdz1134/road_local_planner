@@ -18,6 +18,9 @@ include_directories(
 
 add_library(${PROJECT_NAME}
   src/candidate_gen.cpp
+  src/algorithms/follow_offset.cpp
+  src/algorithms/search_hybrid.cpp
+  src/algorithms/free_fan.cpp
   src/follow_planner.cpp
   src/search_planner.cpp
   src/free_planner.cpp
