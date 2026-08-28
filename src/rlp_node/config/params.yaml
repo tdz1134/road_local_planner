@@ -1,0 +1,44 @@
+# road_local_planner 参数（与 rlp::PlannerParams 字段一一对应）
+# 骨架阶段先取保守默认值，实车后整定
+
+# ---- 车辆能力 / 安全 ----
+v_max: 8.3                  # 最大车速 m/s (30 km/h)
+a_decel_max: 2.0            # 最大减速度 m/s^2（保守值）
+a_lat_max: 2.5              # 最大横向加速度 m/s^2（曲率限速用）
+w_max: 0.8                  # 最大角速度 rad/s
+t_reaction: 0.2             # 反应时间 s（制动包络）
+safety_margin: 2.0          # 附加安全距离 m
+
+# ---- 规划 ----
+plan_freq: 10.0             # 重规划频率 Hz
+path_spacing: 0.5           # 路径采样间距 m
+lookahead_time: 2.0         # 前瞻时间 s，lookahead = max(min_lookahead, v*t)
+min_lookahead: 10.0         # 最小前瞻 m
+lateral_offsets: [0.0, -1.0, 1.0]   # 走廊内横向偏移候选 m
+n_goal_bearings: 5          # SEARCH 模式朝终点扇形候选数
+goal_fan_deg: 25.0          # 扇形半角 deg
+
+# ---- 边界 / 走廊 ----
+boundary_timeout: 0.5       # 单侧边界超时判失效 s
+corridor_hold_max: 3.0      # 双侧缺失后走廊记忆保持时长 s，超时判 MISSING_TIMEOUT
+corridor_inflate_rate: 0.3  # 缺失期间半宽每秒膨胀 m/s（不确定性）
+width_min: 2.0              # 路宽下限 m（异常保护）
+width_max: 20.0             # 路宽上限 m
+boundary_margin_base: 0.5   # 边界安全边距 m
+boundary_margin_speed_gain: 0.06  # 边距随速度增益 m/(m/s)
+
+# ---- 模式仲裁（滞回）----
+q_high: 0.7                 # quality > q_high 进入 SEARCH
+q_low: 0.5                  # quality < q_low 退回 FOLLOW
+mode_dwell: 2.0             # 两次切换最小间隔 s
+
+# ---- 代价权重 ----
+w_offroad: 5.0              # 越出走廊（含单侧缺失时向未知侧）
+w_smooth: 1.0               # 平滑性
+w_progress: 1.0             # 进度（FOLLOW:弧长 SEARCH:朝终点投影）
+w_consistency: 0.5          # 与上一周期路径偏差
+collision_cost: 1000000.0   # 碰撞 = 不可行
+
+# ---- 坐标系 ----
+vehicle_frame: base_link    # 车体系名；假定局部栅格地图亦在该系下给出
+goal_topic_frame: ""        # 预留：终点所在全局系（空则依赖 tf 查询）

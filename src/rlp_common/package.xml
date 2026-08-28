@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>rlp_common</name>
+  <version>0.1.0</version>
+  <description>Common types and geometry utilities for road_local_planner</description>
+  <maintainer email="t@todo.todo">t</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+</package>

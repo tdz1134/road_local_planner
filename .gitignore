@@ -1,0 +1,27 @@
+# catkin build artifacts
+build/
+devel/
+install/
+logs/
+
+# catkin generated
+.catkin_workspace
+src/CMakeLists.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# compile_commands (too large for GitHub)
+compile_commands.json
+
+# Python
+__pycache__/
+*.pyc

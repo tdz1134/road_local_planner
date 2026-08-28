@@ -1,0 +1,18 @@
+<launch>
+  <!-- 局部规划器节点。输入话题（私有 ~）：
+       ~local_map            nav_msgs/OccupancyGrid   局部占据栅格（车体系）
+       ~boundaries/left      rlp_node/Boundary
+       ~boundaries/right     rlp_node/Boundary
+       ~localization/quality rlp_node/LocalizationQuality
+       ~global_goal          geometry_msgs/PoseStamped 全局终点（全局系，经 tf 转到车体系）
+       ~odom                 nav_msgs/Odometry         当前车速
+       输出：
+       ~plan     nav_msgs/Path      局部路径（车体系）
+       ~speed_cmd geometry_msgs/Twist 推荐速度
+       ~status   std_msgs/String    模式/走廊状态调试信息
+  -->
+  <node pkg="rlp_node" type="rlp_node_node"
+        name="road_local_planner" output="screen">
+    <rosparam file="$(find rlp_node)/config/params.yaml" command="load"/>
+  </node>
+</launch>
