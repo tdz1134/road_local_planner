@@ -20,8 +20,8 @@ goal_fan_deg: 25.0          # 扇形半角 deg
 
 # ---- 各方法的候选生成算法选择（未知名字回退到默认算法）----
 follow_alg: offset          # follow: offset=走廊横向偏移族
-search_alg: hybrid          # search: hybrid=走廊偏移族+终点扇形族
-free_alg: fan               # free:   fan=终点方向扇形直线族
+search_alg: hybrid          # search: hybrid=采样式(走廊偏移族+终点扇形族) / astar=A*栅格搜索
+free_alg: fan               # free:   fan=终点方向扇形直线族 / astar=A*栅格搜索 / rrt=RRT随机树
 
 # ---- 边界 / 走廊 ----
 boundary_timeout: 0.5       # 单侧边界超时判失效 s
@@ -43,6 +43,13 @@ w_smooth: 1.0               # 平滑性
 w_progress: 1.0             # 进度（FOLLOW:弧长 SEARCH:朝终点投影）
 w_consistency: 0.5          # 与上一周期路径偏差
 collision_cost: 1000000.0   # 碰撞 = 不可行
+
+# ---- A* 搜索 ----
+astar_max_iter: 50000       # A* 最大迭代次数（安全上限）
+# ---- RRT 搜索 ----
+rrt_max_iter: 2000          # RRT 最大迭代次数（安全上限）
+rrt_step_size: 1.0          # RRT 每次扩展步长 m
+rrt_goal_bias: 0.2          # RRT 朝终点采样的概率 [0,1]
 
 # ---- 坐标系 ----
 vehicle_frame: base_link    # 车体系名；假定局部栅格地图亦在该系下给出

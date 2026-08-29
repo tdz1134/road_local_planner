@@ -20,6 +20,8 @@ add_library(${PROJECT_NAME}
   src/candidate_gen.cpp
   src/algorithms/follow_offset.cpp
   src/algorithms/search_hybrid.cpp
+  src/algorithms/search_astar.cpp
+  src/algorithms/search_rrt.cpp
   src/algorithms/free_fan.cpp
   src/follow_planner.cpp
   src/search_planner.cpp

@@ -35,7 +35,9 @@
 
 规划方法（方法层）与候选生成算法（算法层）两级分离：
 
-- **`MethodAlgorithm`** — 候选生成算法接口：`name()` + `candidates(ctx)`。每个算法独立实现，便于单独替换与对比实验
+- **`MethodAlgorithm`** — 算法接口：`name()` + `candidates(ctx)` + `directPlan(ctx)`。每个算法独立实现，便于单独替换与对比实验。支持两种工作模式：
+  - **采样式**：实现 `candidates()` 返回路径族，由 `CostEvaluator` 统一评价选最优。
+  - **搜索式**：实现 `directPlan()` 直接返回最终路径（如 A\*/RRT），跳过 `CostEvaluator`。默认 `directPlan()` 返回空路径 → 回退到采样式流程。
 - **`MethodPlannerBase`** — 带算法管理的方法基类：内部注册多个算法，运行时按参数（`PlannerParams::follow_alg / search_alg / free_alg`）按名字选择一个生效；未知名字回退到第一个注册的默认算法
 
 分层关系：
@@ -56,11 +58,26 @@ PlannerRouter → PlannerBase 方法（follow/search/free，由道路+定位情�
 
 ### algorithms/ — 各方法的候选生成算法实现
 
-| 算法类 | 名字 | 所属方法 | 说明 |
-|--------|------|----------|------|
-| `FollowOffsetAlg` | `offset` | follow | 走廊中线裁剪后按 `lateral_offsets` 横向偏移成族 |
-| `SearchHybridAlg` | `hybrid` | search | 走廊偏移族 + 终点扇形族合并输出 |
-| `FreeFanAlg` | `fan` | free | 终点方向扇形直线族 |
+| 算法类 | 名字 | 模式 | 说明 |
+|--------|------|------|------|
+| `FollowOffsetAlg` | `offset` | 采样 | 走廊中线裁剪后按 `lateral_offsets` 横向偏移成族 |
+| `SearchHybridAlg` | `hybrid` | 采样 | 走廊偏移族 + 终点扇形族合并输出 |
+| `SearchAStarAlg` | `astar` | **搜索** | 栅格上 A\* 直接搜索出单条最优路径，走廊作为软约束 |
+| `SearchRRTAlg` | `rrt` | **搜索** | 栅格上 RRT 随机树搜索，走廊内偏向采样 |
+| `FreeFanAlg` | `fan` | 采样 | 终点方向扇形直线族 |
+
+### 算法矩阵（方法 × 可选算法）
+
+每个方法可注册多个算法，运行时由参数（`follow_alg` / `search_alg` / `free_alg`）按名字选择：
+
+| 方法 | 适用条件 | 参数 | 可选算法 | 默认 |
+|------|----------|------|----------|------|
+| `FollowPlanner` | 有路 + 定位差 | `follow_alg` | `offset` | `offset` |
+| `SearchPlanner` | 有路 + 定位好 | `search_alg` | `hybrid` / `astar` / `rrt` | `hybrid` |
+| `FreePlanner` | 无路 + 定位好 | `free_alg` | `fan` / `astar` / `rrt` | `fan` |
+
+> `SearchAStarAlg` 和 `SearchRRTAlg` 同时注册在 `SearchPlanner` 和 `FreePlanner` 中。
+> 有走廊时走廊作为软约束/采样偏向；无走廊时自动退化为纯栅格搜索。
 
 ### planner_router — 方法路由
 
@@ -114,11 +131,13 @@ PlannerRouter → PlannerBase 方法（follow/search/free，由道路+定位情�
 
 ```
 1. RoadModel.update()          → 更新道路模型
-2. Router.select()             → 选择规划方法
-3. method.candidates()         → 生成候选路径
-4. CostEvaluator.evaluate()    → 逐条评分，选最优
-5. SafetyChecker.check()       → 校验制动包络，计算推荐速度
-6. 输出 PlanResult             → 路径 + 速度 + 状态
+2. Router.select()             → 选择规划方法 + 算法
+3. method.directPlan()         → 搜索式算法直接返回最终路径（如 A*）
+   ├─ 有结果 → 跳过候选评价，直接进入安全校验   └─ 无结果 → 回退到采样式流程
+4. method.candidates()         → 采样式算法生成候选路径族
+5. CostEvaluator.evaluate()    → 逐条评分，选最优
+6. SafetyChecker.check()       → 校验制动包络，计算推荐速度（始终执行）
+7. 输出 PlanResult             → 路径 + 速度 + 状态
 ```
 
 内部维护跨周期状态：上一周期路径（用于一致性代价和 warm start）。

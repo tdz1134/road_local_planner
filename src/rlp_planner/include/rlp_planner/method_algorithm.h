@@ -20,13 +20,24 @@ namespace planner {
 
 // 单个候选生成算法接口：只负责"给上下文，产候选路径"。
 // 不同算法之间互相独立，便于单独实现/替换/对比实验。
+//
+// 两种工作模式：
+//   采样式：实现 candidates() 返回路径族，由 CostEvaluator 统一评价选最优。
+//   搜索式：实现 directPlan() 直接返回最终路径（如 A*/RRT），跳过 CostEvaluator。
+//   默认 directPlan() 返回空路径 → 走采样式流程。
 class MethodAlgorithm {
  public:
   virtual ~MethodAlgorithm() = default;
-  // 算法唯一名字（用于参数选择与状态输出，如 "offset"/"hybrid"/"fan"）
+  // 算法唯一名字（用于参数选择与状态输出，如 "offset"/"hybrid"/"fan"/"astar"）
   virtual const char* name() const = 0;
-  // 不适用时返回空（由上层停车保护），不要抛异常
+  // 采样式：不适用时返回空（由上层停车保护），不要抛异常
   virtual std::vector<Path> candidates(const PlanningContext& ctx) const = 0;
+  // 搜索式：直接返回最终路径。返回空路径 = 不支持直接规划或搜索失败，
+  // 上层回退到 candidates() 采样式流程。默认不支持。
+  virtual Path directPlan(const PlanningContext& ctx) const {
+    (void)ctx;
+    return {};
+  }
 };
 
 // 带算法管理的规划方法基类：子类只需声明 mode()/name()、
@@ -37,6 +48,12 @@ class MethodPlannerBase : public PlannerBase {
   std::vector<Path> candidates(const PlanningContext& ctx) const final {
     const MethodAlgorithm* alg = selected();
     return alg ? alg->candidates(ctx) : std::vector<Path>();
+  }
+
+  // 转发给当前选中算法的 directPlan（搜索式）
+  Path directPlan(const PlanningContext& ctx) const final {
+    const MethodAlgorithm* alg = selected();
+    return alg ? alg->directPlan(ctx) : Path();
   }
 
   const char* algorithm() const final {

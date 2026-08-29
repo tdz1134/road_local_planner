@@ -128,6 +128,88 @@ int main() {
     check(r.emergency_stop, "full-width obstacle wall -> emergency stop");
   }
 
+  // 8) A* 算法：定位好 + 终点可用，search_alg=astar → 直接搜索出路径（跳过候选评价）
+  {
+    PlannerParams pa = p;
+    pa.search_alg = "astar";
+    PlannerCore c(pa);
+    PlannerInput in = makeInput(straightRoad(true, true), 1.0, 0.9, true);
+    in.map.resolution = 0.5;
+    in.map.width = 120;
+    in.map.height = 100;
+    in.map.origin_x = 0.0;
+    in.map.origin_y = -25.0;
+    in.map.data.assign(120 * 100, 0);  // 全自由栅格（unknown/空均可通行）
+    auto r = c.plan(in);
+    check(r.mode == PlanMode::SEARCH && r.method == "search" &&
+              std::string(r.algorithm) == "astar" && !r.emergency_stop &&
+              r.path.size() > 2,
+          "astar: good loc + goal -> direct A* path");
+  }
+
+  // 9) A* 绕障：走廊中段被占据块挡死中线，A* 应搜出绕行路径（采样族会被碰撞淘汰）
+  {
+    PlannerParams pa = p;
+    pa.search_alg = "astar";
+    PlannerCore c(pa);
+    PlannerInput in = makeInput(straightRoad(true, true), 1.0, 0.9, true);
+    in.map.resolution = 0.5;
+    in.map.width = 120;
+    in.map.height = 100;
+    in.map.origin_x = 0.0;
+    in.map.origin_y = -25.0;
+    in.map.data.assign(120 * 100, 0);
+    // x∈[5,7], y∈[-2.5,2.5] 占据块：挡死走廊中线，但留上下绕行空间（半宽 2.5）
+    for (int gx = 10; gx <= 14; ++gx)
+      for (int gy = 45; gy <= 55; ++gy) in.map.data[gy * 120 + gx] = 100;
+    auto r = c.plan(in);
+    bool detours = false;
+    for (const auto& pp : r.path) {
+      if (std::abs(pp.p.y) > 2.6) { detours = true; break; }
+    }
+    check(!r.emergency_stop && r.path.size() > 2 && detours,
+          "astar: path detours around mid-corridor obstacle");
+  }
+
+  // 10) RRT 算法：定位好 + 终点可用，search_alg=rrt → RRT 搜索出路径（跳过候选评价）
+  {
+    PlannerParams pa = p;
+    pa.search_alg = "rrt";
+    PlannerCore c(pa);
+    PlannerInput in = makeInput(straightRoad(true, true), 1.0, 0.9, true);
+    in.map.resolution = 0.5;
+    in.map.width = 120;
+    in.map.height = 100;
+    in.map.origin_x = 0.0;
+    in.map.origin_y = -25.0;
+    in.map.data.assign(120 * 100, 0);  // 全自由栅格（unknown/空均可通行）
+    auto r = c.plan(in);
+    check(r.mode == PlanMode::SEARCH && r.method == "search" &&
+              std::string(r.algorithm) == "rrt" && !r.emergency_stop &&
+              r.path.size() > 2,
+          "rrt: good loc + goal -> direct RRT path");
+  }
+
+  // 11) FreePlanner + A*：无走廊 + 定位好 + 终点可用，free_alg=astar → 纯栅格 A* 搜索
+  {
+    PlannerParams pa = p;
+    pa.free_alg = "astar";
+    PlannerCore c(pa);
+    // 先用双侧建立走廊，再双侧超时进入 MISSING_TIMEOUT → free 方法
+    c.plan(makeInput(straightRoad(true, true), 1.0, 0.9, true));
+    PlannerInput in = makeInput(straightRoad(false, false), 10.0, 0.9, true);
+    in.map.resolution = 0.5;
+    in.map.width = 120;
+    in.map.height = 100;
+    in.map.origin_x = 0.0;
+    in.map.origin_y = -25.0;
+    in.map.data.assign(120 * 100, 0);
+    auto r = c.plan(in);
+    check(r.method == "free" && std::string(r.algorithm) == "astar" &&
+              !r.emergency_stop && r.path.size() > 2,
+          "free + astar: no corridor, good loc -> pure grid A* path");
+  }
+
   std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nSOME FAILED\n");
   return failures == 0 ? 0 : 1;
 }

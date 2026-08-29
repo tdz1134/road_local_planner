@@ -56,6 +56,11 @@ class PlannerBase {
   virtual const char* algorithm() const { return ""; }
   // 基于当前道路情况生成候选路径；不适用时返回空（上层停车）
   virtual std::vector<Path> candidates(const PlanningContext& ctx) const = 0;
+  // 搜索式算法直接返回最终路径（如 A*/RRT）；默认返回空 = 走 candidates 流程
+  virtual Path directPlan(const PlanningContext& ctx) const {
+    (void)ctx;
+    return {};
+  }
 };
 
 }  // namespace planner

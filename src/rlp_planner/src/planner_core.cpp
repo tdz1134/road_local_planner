@@ -60,21 +60,33 @@ PlanResult PlannerCore::plan(const PlannerInput& in) {
   ctx.margin = margin;
   ctx.prev_path = &prev_path_;
 
-  double best_cost = 1e18;
+  // ---- 3. 尝试搜索式直接规划（A*/RRT 等）----
   Path best_path;
-  for (const auto& c : method->candidates(ctx)) {
-    const double cst = cost_.evaluate(c, in.map, corridor, method->mode(), in.goal,
-                                      in.goal_valid, prev_path_, margin);
-    if (cst < best_cost) {
-      best_cost = cst;
-      best_path = c;
+  bool used_direct = false;
+  {
+    const Path direct = method->directPlan(ctx);
+    if (!direct.empty()) {
+      best_path = direct;
+      used_direct = true;
     }
   }
 
-  // 全部候选碰撞/无效 → 急停
-  if (best_path.empty() || best_cost >= p_.collision_cost * 0.5) {
-    return makeStopResult(method->mode(), st, method->name(),
-                          "no feasible candidate (blocked)");
+  // ---- 3b. 无直接结果 → 采样式候选评价 ----
+  if (!used_direct) {
+    double best_cost = 1e18;
+    for (const auto& c : method->candidates(ctx)) {
+      const double cst = cost_.evaluate(c, in.map, corridor, method->mode(), in.goal,
+                                        in.goal_valid, prev_path_, margin);
+      if (cst < best_cost) {
+        best_cost = cst;
+        best_path = c;
+      }
+    }
+    // 全部候选碰撞/无效 → 急停
+    if (best_path.empty() || best_cost >= p_.collision_cost * 0.5) {
+      return makeStopResult(method->mode(), st, method->name(),
+                            "no feasible candidate (blocked)");
+    }
   }
 
   // ---- 4. 安全校验 + 推荐速度 ----

@@ -71,6 +71,12 @@ struct PlannerParams {
   std::string follow_alg = "offset";
   std::string search_alg = "hybrid";
   std::string free_alg = "fan";
+  // A* 搜索参数
+  int astar_max_iter = 50000;  // A* 最大迭代次数（安全上限）
+  // RRT 搜索参数
+  int rrt_max_iter = 2000;     // RRT 最大迭代次数（安全上限）
+  double rrt_step_size = 1.0;  // RRT 每次扩展步长 m（太大跳窄通道，太小生长慢）
+  double rrt_goal_bias = 0.2;  // RRT 朝终点采样的概率 [0,1]
   // 边界 / 走廊
   double boundary_timeout = 0.5;
   double corridor_hold_max = 3.0;

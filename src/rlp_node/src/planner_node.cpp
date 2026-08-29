@@ -82,6 +82,10 @@ void PlannerNode::loadParams() {
   RLP_GET_PARAM(follow_alg);
   RLP_GET_PARAM(search_alg);
   RLP_GET_PARAM(free_alg);
+  RLP_GET_PARAM(astar_max_iter);
+  RLP_GET_PARAM(rrt_max_iter);
+  RLP_GET_PARAM(rrt_step_size);
+  RLP_GET_PARAM(rrt_goal_bias);
   RLP_GET_PARAM(boundary_timeout);
   RLP_GET_PARAM(corridor_hold_max);
   RLP_GET_PARAM(corridor_inflate_rate);

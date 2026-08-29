@@ -28,17 +28,22 @@ rlp_common ← rlp_road ← rlp_planner ← rlp_node
 
 不同情况用不同规划方法（继承 `MethodPlannerBase`，实现 `PlannerBase` 接口），避免 if-else 大杂烩。每个方法内部又可注册多个候选生成算法（实现 `MethodAlgorithm` 接口），运行时按参数（`follow_alg` / `search_alg` / `free_alg`）按名字切换，便于不同算法对比实验；未知名字回退到第一个注册的默认算法。
 
+算法支持两种工作模式：
+- **采样式**：实现 `candidates()` 返回路径族，由 `CostEvaluator` 统一评价选最优。
+- **搜索式**：实现 `directPlan()` 直接返回最终路径（如 A\*/RRT），跳过 `CostEvaluator`。默认 `directPlan()` 返回空路径 → 回退到采样式流程。
+
 ```
 PlannerRouter → 方法层（follow/search/free，由道路+定位情况路由）
                     └── MethodPlannerBase（注册多个算法，参数切换）
-                          └── 算法层 MethodAlgorithm（offset / hybrid / fan / 新增算法）
+                          └── 算法层 MethodAlgorithm（offset / hybrid / astar / fan / 新增算法）
 ```
 
-| 情况 | 方法 | 默认算法 | 策略 |
-|------|------|----------|------|
-| 有路 + 定位差 | `FollowPlanner` | `offset`（FollowOffsetAlg） | 走廊内横向偏移族，忽略终点 |
-| 有路 + 定位好 | `SearchPlanner` | `hybrid`（SearchHybridAlg） | 走廊偏移族 + 终点扇形族，代价权衡 |
-| 无路 + 定位好 | `FreePlanner` | `fan`（FreeFanAlg） | 纯终点方向扇形直线 |
+| 情况 | 方法 | 默认算法 | 模式 | 策略 |
+|------|------|----------|------|------|
+| 有路 + 定位差 | `FollowPlanner` | `offset` | 采样 | 走廊内横向偏移族，忽略终点 |
+| 有路 + 定位好 | `SearchPlanner` | `hybrid` | 采样 | 走廊偏移族 + 终点扇形族，代价权衡 |
+| 有路 + 定位好 | `SearchPlanner` | `astar`（可选） | **搜索** | 栅格上 A\* 直接搜索，走廊作为软约束 |
+| 无路 + 定位好 | `FreePlanner` | `fan` | 采样 | 纯终点方向扇形直线 |
 
 算法实现位于 `rlp_planner/src/algorithms/`，可复用 `candidate_gen` 中的生成原语（`corridorFamily` / `goalFan` / `lookaheadLength`）。`PlanResult.algorithm` 与 `~status` 话题会输出实际生效的算法名。
 
