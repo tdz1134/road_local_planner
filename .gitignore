@@ -4,6 +4,9 @@ devel/
 install/
 logs/
 
+# unk_nav 独立构建目录（验证零第三方依赖用，不进版本库）
+build_standalone/
+
 # catkin generated
 .catkin_workspace
 src/CMakeLists.txt

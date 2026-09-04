@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>unk_nav</name>
+  <version>0.1.0</version>
+  <description>未知环境局部反应式导航核心算法（零第三方依赖，仅 C++14 标准库，可移植 MDC）</description>
+  <maintainer email="t@todo.todo">t</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+</package>
