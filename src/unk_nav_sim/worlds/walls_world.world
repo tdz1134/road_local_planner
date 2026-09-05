@@ -1,0 +1,216 @@
+<?xml version="1.0" ?>
+<!--
+  walls_world：30×30m，纯横平竖直墙壁障碍
+  机器人出生点：(0, 0, 0)，朝 +X 方向
+
+  设计特点：
+    - 所有障碍都是 axis-aligned 长方体墙（yaw=0），横平竖直
+    - 横墙（东西走向）用橙色，竖墙（南北走向）用绿色，方便区分
+    - 每段墙相互独立、间距 > 1m，不形成凹坑/死角
+    - 所有墙都是凸障碍，unk_nav 可绕行
+
+  坐标约定：X=东，Y=北，Z=上；pose = x y z roll pitch yaw
+-->
+<sdf version="1.6">
+  <world name="walls_world">
+
+    <!-- ====== 物理引擎 ====== -->
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <!-- ====== 光照 ====== -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- ====== 地面 ====== -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Grey</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ====== 边界围墙（高 2m，厚 0.2m）====== -->
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 15.1 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>30.4 0.2 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>30.4 0.2 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -15.1 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>30.4 0.2 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>30.4 0.2 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>15.1 0 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.2 30.0 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 30.0 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-15.1 0 1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.2 30.0 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 30.0 2.0</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ======================================================= -->
+    <!-- ====== 内部障碍：横墙（东西走向，橙色）====== -->
+    <!-- ======================================================= -->
+
+    <!-- 横墙A：中心(4,6)，长6m → x∈[1,7] -->
+    <model name="wall_h_a">
+      <static>true</static>
+      <pose>4 6 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6.0 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>6.0 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Orange</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 横墙C：中心(-6,3)，长5m → x∈[-8.5,-3.5] -->
+    <model name="wall_h_c">
+      <static>true</static>
+      <pose>-6 3 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>5.0 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>5.0 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Orange</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 横墙E：中心(2,-7)，长7m → x∈[-1.5,5.5] -->
+    <model name="wall_h_e">
+      <static>true</static>
+      <pose>2 -7 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>7.0 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>7.0 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Orange</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 横墙G：中心(8,-10)，长5m → x∈[5.5,10.5] -->
+    <model name="wall_h_g">
+      <static>true</static>
+      <pose>8 -10 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>5.0 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>5.0 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Orange</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ======================================================= -->
+    <!-- ====== 内部障碍：竖墙（南北走向，绿色）====== -->
+    <!-- ======================================================= -->
+
+    <!-- 竖墙B：中心(10,2)，长5m → y∈[-0.5,4.5] -->
+    <model name="wall_v_b">
+      <static>true</static>
+      <pose>10 2 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.3 5.0 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.3 5.0 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 竖墙D：中心(-8,-5)，长6m → y∈[-8,-2] -->
+    <model name="wall_v_d">
+      <static>true</static>
+      <pose>-8 -5 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.3 6.0 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.3 6.0 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 竖墙F：中心(-2,9)，长4m → y∈[7,11] -->
+    <model name="wall_v_f">
+      <static>true</static>
+      <pose>-2 9 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.3 4.0 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.3 4.0 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Green</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>
