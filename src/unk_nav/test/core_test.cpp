@@ -21,6 +21,7 @@
 #include "unk_nav/nav_core.h"
 #include "unk_nav/params_io.h"
 #include "unk_nav/path_smooth.h"
+#include "unk_nav/road_follow.h"
 #include "unk_nav/speed_planner.h"
 #include "unk_nav/subgoal.h"
 #include "unk_nav/types.h"
@@ -490,6 +491,62 @@ void testSubgoal() {
   check(!unk::subgoal::project(unk::GridMap(), {3.0, 0.0}, p).valid, "空栅格：返回无效");
 }
 
+// ── road_follow（沿路前瞻，无定位）──────────────────────
+
+void testRoadFollow() {
+  group("road_follow");
+  unk::NavParams p;
+  p.follow_road = true;
+  p.sensor_range = 12.0;  // roadLookahead = 0.35*12 = 4.2
+  const double L = p.roadLookahead();
+  const double W = 20.0, half = W / 2;
+
+  // 直走廊：两侧 y=±3 是墙，中间 free。正前方自由距离最大 + 对齐最好 → 直行
+  unk::GridMap corr = makeGrid(W, 0.05, unk::kFree);
+  fillRect(&corr, -half, 3.0, half, half, unk::kOccupied);    // 北墙
+  fillRect(&corr, -half, -half, half, -3.0, unk::kOccupied);  // 南墙
+  {
+    const auto rr = unk::road::lookAhead(corr, p);
+    check(rr.valid, "直走廊：找到前向");
+    checkNear(rr.bearing, 0.0, 0.06, "直走廊：方向≈正前方");
+    checkNear(rr.reach, L, 0.15, "直走廊：reach≈前瞻（走廊够长）");
+    check(corr.feasibleAt(rr.point.x, rr.point.y), "直走廊：子目标落点可行");
+  }
+
+  // 路中圆柱：正前方被挡，扇形偏向旁边空隙（用户关心的核心场景）
+  unk::GridMap cyl = corr;
+  fillRect(&cyl, 2.2, -0.35, 2.8, 0.35, unk::kOccupied);  // x≈2.5 处的路中障碍
+  {
+    const auto rr = unk::road::lookAhead(cyl, p);
+    check(rr.valid, "路中障碍：仍找到前向");
+    check(std::fabs(rr.bearing) > 0.05,
+          "路中障碍：方向偏转绕过（|θ|=" + f2s(std::fabs(rr.bearing)) + "）");
+    check(rr.reach > 2.8, "路中障碍：reach 越过障碍（=" + f2s(rr.reach) + "）");
+    check(cyl.feasibleAt(rr.point.x, rr.point.y), "路中障碍：子目标落点可行");
+  }
+
+  // 弯道：正前方近处被封（东墙 x>2），北侧开阔 → 方向偏向北（左）
+  unk::GridMap bend = makeGrid(W, 0.05, unk::kFree);
+  fillRect(&bend, -half, -half, half, -3.0, unk::kOccupied);  // 南墙
+  fillRect(&bend, -half, 3.0, -1.0, half, unk::kOccupied);    // 北墙仅 x<-1（x>-1 向北开口）
+  fillRect(&bend, 2.0, -3.0, half, 3.0, unk::kOccupied);      // 东端封堵（逼迫北转）
+  {
+    const auto rr = unk::road::lookAhead(bend, p);
+    check(rr.valid, "弯道：找到前向");
+    check(rr.bearing > 0.5 && rr.bearing < 1.4,
+          "弯道：方向偏向北侧开口（θ=" + f2s(rr.bearing) + " rad）");
+    check(bend.feasibleAt(rr.point.x, rr.point.y), "弯道：子目标落点可行");
+  }
+
+  // 正前方紧贴全封（一步之外即障碍）→ 无可行前向 → 无效
+  unk::GridMap blocked = makeGrid(W, 0.05, unk::kFree);
+  fillRect(&blocked, 0.0, -half, half, half, unk::kOccupied);  // x>=0 全占据
+  check(!unk::road::lookAhead(blocked, p).valid, "正前方全封：前向无效");
+
+  // 空栅格 → 无效
+  check(!unk::road::lookAhead(unk::GridMap(), p).valid, "空栅格：返回无效");
+}
+
 // ── speed_planner ────────────────────────────────────────────────
 
 void testSpeed() {
@@ -714,6 +771,63 @@ void testNavCore() {
   check(nav.fsm().retryCount() == 0, "换终点后脱困计数清零");
 }
 
+// ── nav_core 沿路模式（无定位端到端）────────────────────
+
+void testNavCoreRoad() {
+  group("nav_core 沿路模式");
+  unk::NavParams p;
+  p.follow_road = true;
+  p.sensor_range = 12.0;
+  p.stuck_time = 3.0;
+  const double W = 1.7 * p.sensor_range;  // 20.4
+  const double half = W / 2;
+
+  auto makeRoadInput = [&](const unk::GridMap& grid, double t, double spd) {
+    unk::NavInput in;
+    in.now = t;
+    in.local_grid = grid;
+    in.goal_valid = false;  // 沿路模式无全局终点、无 pose
+    in.current_speed = spd;
+    in.speed_valid = true;
+    return in;
+  };
+
+  // 直走廊：无终点、无 pose → 仍 GO + 出路径 + 非零速度（无定位沿路的核心断言）
+  unk::NavCore nav(p);
+  unk::GridMap corr = makeGrid(W, 0.05, unk::kFree);
+  fillRect(&corr, -half, 3.0, half, half, unk::kOccupied);
+  fillRect(&corr, -half, -half, half, -3.0, unk::kOccupied);
+  const auto r1 = nav.plan(makeRoadInput(corr, 0.0, 0.2));
+  check(r1.state == unk::NavState::GO, "沿路直走廊：GO");
+  check(!r1.path.empty(), "沿路直走廊：出路径");
+  check(r1.recommended_speed > 0.0, "沿路直走廊：非零推荐速度");
+  if (!r1.path.empty()) {
+    check(!pathCollides(nav.workGrid(), r1.path), "沿路直走廊：路径无碰撞");
+    check(r1.path.back().p.x > 1.0, "沿路直走廊：路径朝前推进");
+    check(std::fabs(r1.path.back().p.y) < 3.0, "沿路直走廊：路径留在走廊内");
+  }
+
+  // 路中圆柱：绕行且无碰撞
+  nav.reset();
+  unk::GridMap cyl = corr;
+  fillRect(&cyl, 2.2, -0.35, 2.8, 0.35, unk::kOccupied);
+  const auto r2 = nav.plan(makeRoadInput(cyl, 0.0, 0.2));
+  check(!r2.path.empty(), "沿路遇路中障碍：出路径");
+  if (!r2.path.empty())
+    check(!pathCollides(nav.workGrid(), r2.path), "沿路遇路中障碍：路径无碰撞（绕行）");
+
+  // 走廊被横墙封死：无法前进（speed=0）→ 前进位移棘轮 → RECOVERY → ABORT（不谎报 GO）
+  nav.reset();
+  unk::GridMap dead = makeGrid(W, 0.05, unk::kFree);
+  fillRect(&dead, -half, -half, half, -3.0, unk::kOccupied);
+  fillRect(&dead, -half, 3.0, half, half, unk::kOccupied);
+  fillRect(&dead, 1.5, -3.0, 1.7, 3.0, unk::kOccupied);  // 横贯走廊的墙
+  unk::NavState last = unk::NavState::IDLE;
+  for (double t = 0.0; t <= 30.0; t += 0.1) last = nav.plan(makeRoadInput(dead, t, 0.0)).state;
+  check(last == unk::NavState::ABORT || last == unk::NavState::RECOVERY,
+        "沿路走廊封死：最终 RECOVERY/ABORT（不谎报 GO）");
+}
+
 // ── 曲率基线 + path_smooth ───────────────────────────────────────
 
 double pathMaxK(const unk::Path& p) {
@@ -886,9 +1000,11 @@ int main() {
   testCurvatureBaseline();
   testSmooth();
   testSubgoal();
+  testRoadFollow();
   testSpeed();
   testFsm();
   testNavCore();
+  testNavCoreRoad();
   testParamsIo();
   std::printf("\n----------------------------------------\n");
   std::printf("通过 %d 项，失败 %d 项\n", g_pass, g_fail);

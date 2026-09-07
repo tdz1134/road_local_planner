@@ -104,3 +104,14 @@ recovery_max_retry: 3       # RECOVERY 重试上限，超过 → ABORT 停车交
 # ── 控制器（PurePursuitController，controller.h）──
 pursuit_lookahead: 0.8      # 纯跟踪前视点沿路径的距离 m。调小=贴线紧但抖、
                             # 切内角浅；调大=平滑但拐角切内角深（配合弦碰撞检测自动回退）
+
+# ── 沿路模式（无定位，路线 A：两侧路缘/墙夹出的走廊即道路）──
+# 默认关闭 → 终点导航行为逐字节不变。启用见独立副本 config/nav_params_road.yaml
+# （road_follow.launch 用它）。开启后 NavCore 不再读 vehicle_pose/goal，改从道路走廊
+# 几何（road_follow.h 前向半球扇形扫描）直接推车体系前瞻子目标 → 无定位沿路行驶。
+follow_road: false          # true=道路前瞻子目标（无定位）；false=原终点投影（默认）
+road_fan_half_deg: 75.0     # 车头前向半球扫描半角 deg（θ=0 正前方）
+road_fan_step_deg: 3.0      # 扇形角步长 deg
+road_lookahead_ratio: 0.35  # 沿路前瞻 = ratio×sensor_range
+road_free_w: 2.0            # 打分权重：前方自由距离（越空越想走 → 弯道偏向外侧长边）。必须 > road_align_w
+road_align_w: 1.0           # 打分权重：车头对齐 cosθ（越想直行 → 抑制摆动）

@@ -205,10 +205,38 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, r
 | `astar` | 局部栅格 A\* + 可复用 `Workspace`（含障碍/一致性两张距离带）+ 障碍软代价 + 上帧一致性软代价 + tie-break + 后处理编排 |
 | `path_smooth` | 拐点圆弧倒角 + 拉普拉斯松弛，每步碰撞复验 |
 | `subgoal` | 远处终点 → 窗口内子目标投影（含落点可行性截断） |
+| `road_follow` | 沿路模式：无定位下从栅格走廊几何推车体系前瞻子目标（车头前向半球扇形扫描） |
 | `speed_planner` | 沿线稠密采样障碍距离、制动包络、四条限速 |
 | `behavior_fsm` | 行为状态机，**全部跨周期记忆都在这里** |
 | `nav_core` | 门面：外部只需认识 `NavCore` + `NavInput` + `NavResult` |
 | `params_io` | 从 `config/nav_params.yaml` 加载 `NavParams`（全库唯一 yaml-cpp 触点；严格校验：未知 key / 类型错 / 文件不存在均拒绝启动，未写的 key 保持代码默认值） |
+
+---
+
+## 二·五、沿路模式（无定位，走廊即道路）
+
+终点导航需要定位：把窗口外的全局终点经 `globalToBase(goal, pose)` 换算到车体系才知道
+“朝哪走”。**沿路模式（`follow_road=true`）去掉这个依赖**——定位在整条链路里唯一的实质
+用途就是放置全局终点，去掉它即得无定位沿路（感知 `grid_node` 用静态 TF、规划、控制本就只
+吃 base 系）。
+
+- **道路 = 两侧路缘/墙夹出的可通行走廊**（路线 A）。激光打到边界 → 栅格形成 free 带，
+  这条带就是路，**不需任何显式语义层**。路中的小障碍（圆柱、石块）只是带内一撮 occupied
+  格：走廊由横向边界界定、不受它影响，绕行是下游 A\*（凸障碍强项）+ 障碍软代价回中的职责。
+- **前进方向以车头（base 系 +x）为基准**：`road_follow` 在前向半球（±`road_fan_half_deg`）
+  撒扇形射线，打分 `road_free_w·(前方自由距离/L) + road_align_w·cosθ`，取 argmax 得子目标。
+  直走廊→直行；弯道→自由距离项把方向拽向更空的一侧；路中圆柱→偏向旁边空隙，A\* 绕过后回中。
+  **`road_free_w` 必须 > `road_align_w`**，否则对齐项过强、车会顶着弯墙不转。
+- **数据流只换子目标来源**：`nav_core` 顶部按 `follow_road` 二选一——开则 `road::lookAhead`，
+  关则原 `globalToBase + subgoal::project`。A\*/平滑/限速/控制全部共用，`follow_road=false` 时逐字节不变。
+- **卡死判定**：无终点 → 永不 ARRIVED；推进量改用「带符号前进位移」棘轮（∫`current_speed`·dt，
+  本体感知非定位），物理卡住/前后振荡都抓得住；`speed_valid=false`（无里程计）时退化为仅
+  「规划连续失败」检测。走廊封死 → RECOVERY → ABORT，不谎报 GO。
+- **一致性软代价**：沿路模式无 pose 重投影，直接复用上一帧 base 系路径作吸引子（滞后约 v/freq）。
+
+**能力边界**：横贯全路的封堵、路口按高层指令转向、开阔广场中仅凭划线定义的道路（激光看不见，
+需相机/语义层）均不在 v0 范围。参数见 `config/nav_params_road.yaml`（road 模式专用副本；默认 `nav_params.yaml` 的 `follow_road:false`
+保持终点导航不变）。仿真跑法与配置说明见 [`unk_nav_sim/README.md`](../unk_nav_sim/README.md) 的「沿路模式」小节。
 
 ---
 
@@ -220,7 +248,7 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, r
 # 方式一：独立构建 —— MDC 交付物形态；唯一外部依赖 yaml-cpp（只有 params_io 一处引用）
 mkdir -p build_standalone && cd build_standalone
 cmake ../src/unk_nav -DCMAKE_BUILD_TYPE=Release && make
-./unk_nav_test      # 198+ 项断言（含 tie-break 第 12 组；批次2/3 改动后尚未重跑计数）
+./unk_nav_test      # 226+ 项断言（含 tie-break / EDT / 障碍软代价 / 一致性 / 沿路模式 22 项）
 ./unk_nav_demo      # 闭环 demo
 
 # 方式二：随工作区构建（与 rlp_* 共存开发）
@@ -460,8 +488,9 @@ MDC 是 ARM，按 3~5× 折算，平均约 3~6 ms、最坏约 22~38 ms，仍在�
 3. **`inflate` 的感兴趣区域化**
    实车尺度下它是唯一随栅格总格数线性增长的开销（104 万格约 1 MB 拷贝 + 扫描），
    目前占比可接受。
-4. **ROS 节点壳 + Gazebo 仿真**
-   两者都不进 MDC 交付物，等有实车接口定义后再做。
+4. ~~**ROS 节点壳 + Gazebo 仿真**~~ —— 基础已就位（`unk_nav_sim`：`localization_node` + `grid_node`
+   + `nav_node`；沿路模式有 `road_world.world` / `road_follow.launch`）。下一步：等实车接口定义后
+   做集成调试；仿真侧可扩展更多道路场景或接入外部感知。
 
 ### 已知的行为特性（不是 bug，但集成方必须知道）
 

@@ -238,9 +238,25 @@ struct NavParams {
 
   double plan_freq = 10.0;  // 规划频率 Hz
 
+  // ---- 沿路模式（无定位，路线 A：两侧路缘/墙夹出的走廊即道路）----
+  // follow_road=true 时，NavCore 不再用「全局终点经定位投影」得到子目标，而是直接
+  // 从局部栅格的道路走廊几何推出一个车体系前瞻点（见 road_follow.h）。因此该模式
+  // **完全不读 vehicle_pose / goal** —— 感知(grid_node)、规划、控制本就只吃 base 系，
+  // 定位在整条链路里唯一的实质用途就是放置全局终点，去掉它即得无定位沿路。
+  // 前进方向以车头朝向为基准（前向半球扇形扫描），无需任何全局定向。
+  // 默认 false = 原终点导航行为逐字节不变；road 模式建议用独立的 nav_params_road.yaml。
+  bool   follow_road          = false; // true=道路前瞻子目标；false=原终点投影（默认）
+  double road_fan_half_deg    = 75.0;  // 车头前向半球扫描半角 deg（θ=0 为正前方 +x）
+  double road_fan_step_deg    = 3.0;   // 扇形扫描角步长 deg
+  double road_lookahead_ratio = 0.35;  // 沿路前瞻距离 = ratio * sensor_range
+  double road_free_w          = 2.0;   // 打分权重：前方自由距离（越空越想走）。必须 > road_align_w，
+                                       // 否则对齐项 cosθ 过强，车会顶着弯道外墙直到几乎撞上才转
+  double road_align_w         = 1.0;   // 打分权重：与车头对齐度 cosθ（越想直行，抑制无谓摆动）
+
   // ---- 派生量（勿手工设置）----
   double lookahead() const { return lookahead_ratio * sensor_range; }
   double subgoalMin() const { return subgoal_min_ratio * sensor_range; }
+  double roadLookahead() const { return road_lookahead_ratio * sensor_range; }
 };
 
 // 单周期输入
@@ -251,6 +267,10 @@ struct NavInput {
   Point2D goal;            // 终点，全局系，可在窗口外任意远
   bool goal_valid = false; // 终点是否有效（tf 可用、上游已下发等）
   double current_speed = 0.0;
+  // 车速是否来自有效测量（body 系轮速 / odom.twist）。沿路模式的前进位移棘轮依赖它；
+  // false（如无定位又不接里程计）时该判定退化为仅「规划连续失败」检测。默认 true，
+  // 保持终点模式与既有单测行为不变。
+  bool speed_valid = true;
 };
 
 // 单周期输出

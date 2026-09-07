@@ -1,0 +1,83 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# unk_nav 沿路模式配置（无定位、基于栅格走廊）
+#
+# 这是 nav_params.yaml 的**沿路专用副本**：默认那套终点导航完全不受影响。
+# 谁在读：road_follow.launch 用 config_file 私有参数把本文件路径传给 nav_node，
+#         由 unk::loadNavParams() 直接读取（不走 ROS 参数服务器）。
+#
+# 与终点导航的关键区别：
+#   · follow_road: true —— NavCore 不再用「全局终点经定位投影」得子目标，而是从
+#     局部栅格的道路走廊几何直接推车体系前瞻点（road_follow.h）。规划**完全不读
+#     vehicle_pose / goal**，因此无需定位。
+#   · inflation_radius 收到 0.7 —— 走廊仅 6m 宽，默认 1.5 的厚膨胀带两侧共 3m 会把
+#     路夹死；0.7（= robot_radius 0.46 + 跟踪余量）两侧共 1.4m，留 4.6m 通行。
+#
+# 格式约束（params_io.cpp 严格校验）：写了未知 key / 类型不对 → 启动直接报错退出。
+# 加新参数三处同步：types.h 字段 + params_io.cpp 绑定表 + 本文件一行。
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 车辆能力（Scout v2 差速底盘）──
+v_max: 1.5                  # 最大线速度 m/s
+w_max: 0.8                  # 最大角速度 rad/s
+a_decel_max: 1.0            # 最大减速度 m/s²
+a_lat_max: 1.5              # 最大横向加速度 m/s²
+robot_radius: 0.46          # 车体半径 m
+
+# ── 感知尺度 ──
+sensor_range: 20.0          # 激光有效量程 m。road_lookahead 也乘这个值
+
+# ── 栅格预处理 ──
+inflation_radius: 0.7       # 【沿路专用】走廊 6m 宽，膨胀带两侧共 1.4m，留 4.6m 通行。
+                            # 太大（如默认 1.5）会把走廊夹死 → A* 无解 → RECOVERY/ABORT
+footprint_clear_radius: 0.50  # 车体足迹清空半径 m（≥robot_radius 且 <inflation_radius）
+inflate_unknown: false      # unknown 乐观放行
+
+# ── 滚动时域规划 ──
+lookahead_ratio: 0.6       # （终点模式用；沿路模式走 road_lookahead_ratio）
+subgoal_min_ratio: 0.10
+path_spacing: 0.05
+curvature_baseline: 0.30
+goal_tolerance: 0.5         # （沿路模式无终点，不触发到达判定）
+goal_snap_dist: 1.0         # 子目标落障碍格时的螺旋吸附半径 m（road 子目标已保证可行，此为双保险）
+plan_freq: 10.0
+
+# ── 沿路模式（无定位，路线 A：走廊即道路）──
+follow_road: true           # 开启沿路：子目标来自 road_follow 前向半球扫描，不读 pose/goal
+road_fan_half_deg: 75.0     # 车头前向半球扫描半角 deg（θ=0 正前方）。走廊内够用；
+                            # 急弯多可加大到 90 让扇形覆盖正侧方
+road_fan_step_deg: 3.0      # 扇形角步长 deg。调小=方向更细腻但每周期射线更多
+road_lookahead_ratio: 0.35  # 沿路前瞻 = 0.35×20 = 7.0m（< 窗口半宽 17m）。
+                            # 调大=看得远跟弯更从容；调小=贴地但对弯道反应更急
+road_free_w: 2.0            # 打分权重：前方自由距离（越空越想走 → 弯道偏向外侧长边）。
+                            # 必须 > road_align_w：否则 cosθ 对齐项过强，车会顶着弯墙不转
+road_align_w: 1.0           # 打分权重：车头对齐 cosθ（越想直行 → 抑制无谓摆动）。
+                            # 直路抖 → align_w↑；跟弯迟钝/切内墙 → free_w↑ 或 align_w↓
+
+# ── A* 搜索 ──
+astar_max_iter: 200000
+unknown_cost: 1.4
+astar_w: 1.0
+obstacle_cost_k: 1.0        # 障碍距离软代价：把路径推向走廊中央、离两侧墙更远（沿路居中的关键）
+obstacle_cost_sigma: 0.35
+consistency_k: 0.4          # 路径一致性软代价：抑制沿路时的每帧左右翻烧饼
+consistency_sigma: 0.4
+
+# ── 速度规划 ──
+safety_margin: 0.3
+t_reaction: 0.1
+kappa_max: 0.0
+dk_max: 50.0
+
+# ── 路径平滑 ──
+smooth_corner_speed: 0.22
+smooth_laplacian_iters: 2
+smooth_laplacian_lambda: 0.2
+smooth_shrink_retry: 3
+
+# ── 卡死 / 脱困（沿路模式：前进位移棘轮 ∫v·dt + 规划连续失败）──
+stuck_time: 5.0             # 判定时长 s
+stuck_dist: 0.1             # 前进推进阈值 m（< v_max×stuck_time = 7.5m，余量充足）
+recovery_max_retry: 3       # 重试上限，超过 → ABORT
+
+# ── 控制器 ──
+pursuit_lookahead: 0.8

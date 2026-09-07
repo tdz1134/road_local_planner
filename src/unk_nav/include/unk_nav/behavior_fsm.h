@@ -23,6 +23,8 @@ struct Context {
   bool plan_ok = false;        // 本周期是否搜到了路径
   bool emergency_stop = true;  // 速度层是否要求急停
   double current_speed = 0.0;
+  bool speed_valid = true;     // 车速是否来自有效测量；沿路模式前进位移棘轮依赖它，
+                               // false（无里程计）时该棘轮不可用，仅靠规划失败判定兜底
 };
 
 class BehaviorFsm {
@@ -48,6 +50,8 @@ class BehaviorFsm {
   // 无进展判定：在 stuck_time 内没能朝终点实质性推进（见 .cpp 说明为什么用「推进」
   // 而不是「位移」）；true 表示本周期触发了一次重试计数
   bool checkStuck(const Context& ctx);
+  // 沿路模式无进展判定：无全局终点，改用「带符号前进位移」棘轮（∫current_speed·dt）
+  bool checkStuckRoad(const Context& ctx);
   // 规划失败（连续被挡）判定
   bool checkPlanFail(const Context& ctx);
   // 触发一次重试：累加计数，超限转 ABORT
@@ -67,6 +71,14 @@ class BehaviorFsm {
   bool progress_valid_ = false;
   double best_goal_dist_ = 0.0;
   double best_goal_time_ = 0.0;
+
+  // 沿路模式无进展棘轮：前进位移 = ∫current_speed·dt（body 系前向速度，本体感知非定位）。
+  // 物理卡住(v≈0)或前后振荡(v 变号、净值≈0)都能抓住；正常前进过阈则刷新并清 retry_。
+  bool road_progress_valid_ = false;
+  double road_adv_ = 0.0;         // 累计前进位移
+  double road_adv_base_ = 0.0;    // 棘轮基准位移
+  double road_adv_t0_ = 0.0;      // 基准取得时刻
+  double road_adv_last_t_ = 0.0;  // 上次积分时刻
 };
 
 }  // namespace fsm

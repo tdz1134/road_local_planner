@@ -1,6 +1,6 @@
 ---
 name: road-local-planner
-description: 差速底盘沿路路径规划系统（rlp_*）架构与设计规范。当涉及路径规划、边界管理、走廊构建、模式路由、代价评估时参考此 skill。适用于理解系统分层、修改或新增候选生成算法（offset/hybrid/astar/rrt/fan）、调试边界状态机或扩展新规划方法。也用于区分 rlp_* 与平行且独立的 unk_nav（未知环境局部反应式导航）两套系统与各自的配置约定。
+description: 差速底盘沿路路径规划系统（rlp_*）架构与设计规范，含 unk_nav（无定位/未知环境导航）边界。涉及路径规划、边界管理、走廊构建、模式路由、代价评估，或需区分 rlp_* 与 unk_nav 两套独立系统时参考此 skill。
 ---
 
 # 沿路路径规划系统
@@ -21,9 +21,10 @@ description: 差速底盘沿路路径规划系统（rlp_*）架构与设计规�
 | 配置 | `rlp_node/config/params.yaml`，rosparam 加载 | `unk_nav/config/nav_params.yaml`（归算法层），经 `params_io::loadNavParams` 读，**不走 rosparam** |
 | 依赖 | 无 ROS 内核 + `rlp_node` ROS 壳 | 纯 C++14 + yaml-cpp（仅 `params_io` 一处），核心零 ROS；`unk_nav_sim` 为 ROS/Gazebo 胶水层 |
 
-改 `unk_nav` 前先看 `src/unk_nav/README.md`（本 skill 不展开其细节）。两处约定提醒：
+改 `unk_nav` 前先看 `src/unk_nav/README.md`（本 skill 不展开其细节）。要点：
 - **加参数三处同步**：`types.h::NavParams` 字段 + `params_io.cpp` 绑定表 + yaml 一行；未知 key / 类型错直接拒绝启动。
 - **能力边界**：凸障碍可绕；凹槽深于前瞻（`lookahead_ratio × sensor_range`）会落入局部极小 → RECOVERY → ABORT（绕行/脱困已明确排除在范围外）。
+- **沿路模式**（`follow_road=true`）：去掉全局定位依赖，用栅格走廊几何（车头前向半球扇形扫描）推子目标；数据流只换子目标来源，A\*/平滑/限速/控制全部复用。无定位时开此模式，有定位时用原始终点导航，`follow_road` 开关切换（当前为手动配置切换）。能力边界：横贯全路的封堵、路口转向、仅凭划线定义的道路（激光不可见）不在范围。
 
 ## 四层架构
 

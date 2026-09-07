@@ -47,6 +47,8 @@ class NavCore {
   // 作为 A* 的一致性吸引子。存 odom 而非 base：车每帧在动，base 系会漂移。
   std::vector<Point2D> last_path_odom_;   // 上帧路径（odom 系）；空 = 无上帧
   std::vector<Point2D> prev_path_base_;   // 每帧把 last_path_odom_ 换到当前 base 系的复用缓冲
+  // 沿路模式无 pose 可重投影，直接存/复用上一帧的 base 系路径（滞后约 v/freq，作为软吸引子足够）。
+  std::vector<Point2D> last_path_base_;   // 上帧路径（base 系），仅 follow_road 时使用
   bool have_prev_path_ = false;
 };
 

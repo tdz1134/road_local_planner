@@ -27,6 +27,26 @@ roslaunch unk_nav_sim unk_nav_test.launch world:=walls   # 30×30m 墙壁世界
 roslaunch unk_nav_sim unk_nav_test.launch gui:=false     # 无头模式
 ```
 
+### 沿路模式（无定位，走廊即道路）
+
+不点目标、不依赖定位，Scout 沿两侧路缘夹出的走廊自动前行、绕路中障碍、跟弯：
+
+```bash
+roslaunch unk_nav_sim road_follow.launch
+```
+
+- 世界 `road_world.world`：直走廊 + 两个路中圆柱 + 90° 弯。
+- 导航配置 `unk_nav/config/nav_params_road.yaml`（`follow_road=true`）：NavCore 从栅格
+  走廊几何直接推车体系前瞻子目标，**完全不读定位/全局终点**。
+- **默认不启动 localization_node**（体现“无定位”）：规划只用 base 系栅格；RViz Fixed Frame
+  为 base_link（车在原点、走廊随车滚动），路径以 base_link 系发布。
+- 可选 `use_localization:=true`：提供 body 系车速（本体感知）与 odom 真值可视化；沿路规划仍不读 pose。
+
+```bash
+roslaunch unk_nav_sim road_follow.launch use_localization:=true   # 供车速 + 真值可视化
+roslaunch unk_nav_sim road_follow.launch gui:=false               # 无头
+```
+
 ---
 
 ## 架构
@@ -117,7 +137,7 @@ cmd.angular.z = tc.w;
 |------|------|------|------|
 | `/move_base_simple/goal` | geometry_msgs/PoseStamped | RViz → nav_node | 用户点击的目标点（odom 系） |
 | `/cmd_vel` | geometry_msgs/Twist | nav_node → Scout | 速度指令（linear.x + angular.z） |
-| `/unk_nav/path` | nav_msgs/Path | nav_node 发布 | 当前规划路径（odom 系，RViz 可视化） |
+| `/unk_nav/path` | nav_msgs/Path | nav_node 发布 | 当前规划路径（目标模式 odom 系，沿路模式 base_link 系） |
 | `/unk_nav/state` | std_msgs/String | nav_node 发布 | 导航状态（GO/IDLE/ARRIVED/ABORT + 原因） |
 
 ### 电机控制（底层）
@@ -188,15 +208,18 @@ cmd.angular.z = tc.w;
 
 ## 参数配置
 
-**两个 yaml 是参数的唯一事实源**，已覆盖算法层（`NavParams` 每个字段）与仿真层的全部
-旋钮，每个参数带「作用 + 调大/调小的后果」注释，文件顶部还有「症状 → 该动哪个参数」
-速查表。调试时直接改 yaml、重启 launch 即生效，本 README 不再重复参数表（避免两处
-维护漂移）：
+导航算法参数（同一份 yaml 供离线 demo、Gazebo 仿真、实车/MDC 三方复用，由 `unk::loadNavParams()` 直接读取，**不走 ROS 参数服务器**）：
 
-| 文件 | 作什么 | 归属 / 加载方式 |
-|------|--------|----------|
-| `unk_nav/config/nav_params.yaml` | 规划/控制全量参数（车辆能力、膨胀、滚动时域、A*、限速、平滑、卡死） | **算法层，与 ROS 解耦**；launch 用 `config_file` 私有参数把路径传给 nav_node，由 `unk::loadNavParams()` 直接读取（**不走 ROS 参数服务器**），同一份配置 demo/实车复用 |
-| `unk_nav_sim/config/grid_params.yaml` | 点云→栅格（分辨率、窗口、Z 切片、量程） | 仿真层，rosparam → grid_node |
+| 文件 | 场景 | 说明 |
+|------|------|------|
+| `unk_nav/config/nav_params.yaml` | 终点导航（默认） | 规划/控制全量参数，`follow_road:false` |
+| `unk_nav/config/nav_params_road.yaml` | 沿路模式 | 启用 `follow_road:true`，调整膨胀与走廊前瞻参数 |
+
+仿真层参数（rosparam → 仿真节点）：
+
+| 文件 | 归属 / 加载方式 |
+|------|----------|
+| `unk_nav_sim/config/grid_params.yaml` | 仿真层，rosparam → grid_node |
 
 高频调参入口（完整说明看 yaml 内注释）：
 
@@ -223,15 +246,18 @@ unk_nav_sim/
 │   └── nav_node.cpp            ← ROS 接口壳（调用 unk_nav 库）
 ├── config/
 │   ├── grid_params.yaml        ← 栅格参数（仿真层）
-│   └── unk_nav.rviz            ← RViz 配置
-│   （导航参数已移到算法层 ../unk_nav/config/nav_params.yaml）
+│   ├── unk_nav.rviz            ← RViz 配置（终点导航，Fixed Frame=odom）
+│   └── road_follow.rviz        ← RViz 配置（沿路模式，Fixed Frame=base_link）
+│   （导航参数在算法层 ../unk_nav/config/：nav_params.yaml 终点、nav_params_road.yaml 沿路）
 ├── launch/
-│   ├── unk_nav_test.launch     ← 全链路一键启动
+│   ├── unk_nav_test.launch     ← 终点导航全链路一键启动
+│   ├── road_follow.launch      ← 沿路模式（无定位）一键启动
 │   ├── large_world.launch      ← 只启动 200×200m 世界
 │   └── walls_world.launch      ← 只启动 30×30m 墙壁世界
 ├── worlds/
 │   ├── large_world.world       ← 200×200m，20个障碍
 │   ├── walls_world.world       ← 30×30m，纯墙壁
+│   ├── road_world.world        ← 走廊道路（沿路模式：直路+路中圆柱+90°弯）
 │   └── unk_world.world         ← 30×30m，混合障碍
 ├── gazebo笔记.md               ← Gazebo 世界搭建教程
 ├── CMakeLists.txt

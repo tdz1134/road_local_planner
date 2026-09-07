@@ -12,6 +12,8 @@ void BehaviorFsm::reset() {
   fail_active_ = false;
   fail_since_ = 0.0;
   progress_valid_ = false;
+  road_progress_valid_ = false;
+  road_adv_ = road_adv_base_ = road_adv_t0_ = road_adv_last_t_ = 0.0;
 }
 
 void BehaviorFsm::newGoal() {
@@ -22,6 +24,8 @@ void BehaviorFsm::newGoal() {
   retry_ = 0;
   fail_active_ = false;
   progress_valid_ = false;
+  road_progress_valid_ = false;
+  road_adv_ = road_adv_base_ = road_adv_t0_ = road_adv_last_t_ = 0.0;
   detail_ = "new goal";
 }
 
@@ -32,6 +36,7 @@ NavState BehaviorFsm::onStuckTriggered(const char* detail) {
   // 重试次数转 ABORT，RECOVERY 根本没起到「等栅格更新后重试」的作用。
   fail_active_ = false;
   progress_valid_ = false;
+  road_progress_valid_ = false;  // 沿路棘轮也作废，给一个完整的 stuck_time 窗口重新证明
   if (retry_ > p_.recovery_max_retry) {
     state_ = NavState::ABORT;
     detail_ = "recovery exhausted";
@@ -83,6 +88,39 @@ bool BehaviorFsm::checkStuck(const Context& ctx) {
   return (ctx.now - best_goal_time_) >= p_.stuck_time;
 }
 
+// 沿路模式的无进展判定。无全局终点，改用「带符号前进位移」棘轮：
+// 前进位移 = ∫ current_speed·dt（body 系前向速度，本体感知，非定位）。
+//   · 物理卡住（v≈0）→ 位移不增 → 抓住；
+//   · 前后振荡（v 变号）→ 净位移≈0 → 抓住；
+//   · 正常前进 → 位移过阈 → 刷新棘轮并清 retry_（临时障碍绕过后恢复健康）。
+// speed_valid=false（无里程计）时本判定不可用 → 返回 false，仅靠 checkPlanFail 兜底
+//（见 README 能力边界：此时无法检测「有可行规划但被顶住不动」，属无定位降级）。
+bool BehaviorFsm::checkStuckRoad(const Context& ctx) {
+  // 只在「规划说能走」时判无进展；规划本身失败由 checkPlanFail 负责
+  if (!ctx.plan_ok || ctx.emergency_stop) return false;
+  if (!ctx.speed_valid) return false;  // 无有效车速 → 不判（避免 ∫0·dt 恒为0 误触发 ABORT）
+
+  const double dt = ctx.now - road_adv_last_t_;
+  road_adv_last_t_ = ctx.now;
+  // 首周期或时间跳变时 dt 可能异常大，夹上限防止位移积分爆掉
+  if (dt > 0.0 && dt < 1.0) road_adv_ += ctx.current_speed * dt;
+
+  if (!road_progress_valid_) {
+    road_adv_base_ = road_adv_;
+    road_adv_t0_ = ctx.now;
+    road_progress_valid_ = true;
+    return false;
+  }
+  // 棘轮：实质性前进（超过 stuck_dist）才刷新基准与计时，并清 retry_（临时障碍已绕过）
+  if (road_adv_ - road_adv_base_ >= p_.stuck_dist) {
+    road_adv_base_ = road_adv_;
+    road_adv_t0_ = ctx.now;
+    retry_ = 0;
+    return false;
+  }
+  return (ctx.now - road_adv_t0_) >= p_.stuck_time;
+}
+
 NavState BehaviorFsm::update(const Context& ctx) {
   // ---- 1) 无终点 ----
   if (!ctx.goal_valid) {
@@ -105,7 +143,8 @@ NavState BehaviorFsm::update(const Context& ctx) {
   // ---- 3) 到达判定 ----
   // 只判距离，不判航向：差速底盘原地转向能力充足，强制对齐航向会让车在终点附近
   // 来回转圈，对 demo 与实车都是负收益。需要定向停靠时再显式加参数与判定。
-  if (ctx.goal_dist <= p_.goal_tolerance) {
+  // 沿路模式无全局终点 → 永不 ARRIVED，跳过本判定（一直跟路直到被阻 ABORT 或外部停车）。
+  if (!p_.follow_road && ctx.goal_dist <= p_.goal_tolerance) {
     state_ = NavState::ARRIVED;
     detail_ = "goal reached";
     return state_;
@@ -116,8 +155,11 @@ NavState BehaviorFsm::update(const Context& ctx) {
     return onStuckTriggered("plan blocked too long");
   }
 
-  // ---- 5) 规划成功但没能朝终点推进 ----
-  if (checkStuck(ctx)) {
+  // ---- 5) 规划成功但没能推进 ----
+  // 终点模式：朝终点推进量棘轮；沿路模式：带符号前进位移棘轮。
+  if (p_.follow_road) {
+    if (checkStuckRoad(ctx)) return onStuckTriggered("no road progress");
+  } else if (checkStuck(ctx)) {
     return onStuckTriggered("no progress");
   }
 

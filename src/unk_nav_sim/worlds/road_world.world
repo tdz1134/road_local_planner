@@ -1,0 +1,216 @@
+<?xml version="1.0" ?>
+<!--
+  road_world：无定位沿路行驶的走廊道路世界（路线 A：两侧路缘夹出的走廊即道路）
+
+  道路布局（俯视，X=东，Y=北）：
+    · 水平走廊：沿 +X，中心线 y=0，路宽 6m（y=-3..3），x 从 -22 到 7
+    · 90° 左弯：在 x=1..7 处向北折，垂直走廊中心线 x=4，路宽 6m（x=1..7），y 从 3 到 22
+    · 路中障碍：两个红色圆柱（r=0.3）落在水平走廊内，验证「绕行 + 过后回中」
+    · 出生点：(-20, 0)，车头朝 +X（沿走廊向东）
+
+  设计要点：
+    - 道路 = 两侧灰色路缘墙夹出的自由走廊；激光打到路缘 → 栅格形成 free 带 = 道路。
+    - 路中圆柱只是走廊内的一撮 occupied 格，无需任何「道路语义」特殊标注：
+      road_follow 的前向半球扇形会自动偏向圆柱旁的空隙，A* 绕行后正前方又最远 → 回中。
+    - 黑色沥青条为 visual-only（无 collision、static），仅供肉眼识别道路，
+      且高度贴地（z≈0.005 < grid_node 的 z_min=0.1），激光不会打到 → 不干扰栅格。
+    - 所有障碍均为凸形（路缘、圆柱），不构成凹坑；走廊尽头/横贯全路的封堵才会 ABORT。
+
+  坐标约定：pose = x y z roll pitch yaw；z 是几何中心高度（高 1.5m 的墙 → z=0.75）。
+-->
+<sdf version="1.6">
+  <world name="road_world">
+
+    <!-- ====== 物理引擎 ====== -->
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <!-- ====== 光照 ====== -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- ====== 地面（草地）====== -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/Green</name>
+            </script>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ======================================================= -->
+    <!-- ====== 沥青路面（visual-only，仅肉眼识别道路）====== -->
+    <!-- ======================================================= -->
+
+    <!-- 水平段沥青：覆盖 x=-22..7, y=-3..3 -->
+    <model name="asphalt_h">
+      <static>true</static>
+      <pose>-7.5 0 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>29.0 6.0 0.01</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Black</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 垂直段沥青：覆盖 x=1..7, y=3..22 -->
+    <model name="asphalt_v">
+      <static>true</static>
+      <pose>4 12.5 0.005 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>6.0 19.0 0.01</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Black</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ======================================================= -->
+    <!-- ====== 路缘墙（collision+visual，激光可见，定义走廊）====== -->
+    <!-- 高 1.5m、厚 0.3m、灰色混凝土；z=0.75 表示底面贴地 -->
+    <!-- ======================================================= -->
+
+    <!-- 南路缘：y=-3，x 从 -22 到 7（含弯道外侧）-->
+    <model name="curb_south">
+      <static>true</static>
+      <pose>-7.5 -3 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>29.0 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>29.0 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 北路缘：y=+3，x 从 -22 到 1（在弯道口停止，让出向北的转弯开口）-->
+    <model name="curb_north">
+      <static>true</static>
+      <pose>-10.5 3 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>23.0 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>23.0 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 垂直走廊西路缘：x=1，y 从 3 到 22（衔接北路缘末端）-->
+    <model name="curb_vert_west">
+      <static>true</static>
+      <pose>1 12.5 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.3 19.0 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.3 19.0 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 垂直走廊东路缘：x=7，y 从 -3 到 22（兼作水平走廊的东端封堵 = 弯道外墙）-->
+    <model name="curb_vert_east">
+      <static>true</static>
+      <pose>7 9.5 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.3 25.0 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.3 25.0 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 西端封堵：x=-22，y 从 -3.3 到 3.3（出生点背后封死，走廊闭合）-->
+    <model name="curb_west_cap">
+      <static>true</static>
+      <pose>-22 0 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.3 6.6 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.3 6.6 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 北端封堵：y=22，x 从 0.7 到 7.3（垂直走廊尽头）-->
+    <model name="curb_north_cap">
+      <static>true</static>
+      <pose>4 22 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>6.6 0.3 1.5</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>6.6 0.3 1.5</size></box></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Grey</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ======================================================= -->
+    <!-- ====== 路中障碍：圆柱（验证绕行 + 回中）====== -->
+    <!-- r=0.3m、高 1.5m、红色；落在水平走廊内，不横贯全路 → 可绕 -->
+    <!-- ======================================================= -->
+
+    <!-- 圆柱 A：(-12, 0.8)，偏北 -->
+    <model name="pillar_a">
+      <static>true</static>
+      <pose>-12 0.8 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Red</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 圆柱 B：(-4, -1.0)，偏南 -->
+    <model name="pillar_b">
+      <static>true</static>
+      <pose>-4 -1.0 0.75 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry></collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.3</radius><length>1.5</length></cylinder></geometry>
+          <material><script><uri>file://media/materials/scripts/gazebo.material</uri><name>Gazebo/Red</name></script></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

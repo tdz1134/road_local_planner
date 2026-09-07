@@ -36,6 +36,7 @@ add_library(${PROJECT_NAME}_core
   src/astar.cpp
   src/path_smooth.cpp
   src/subgoal.cpp
+  src/road_follow.cpp
   src/speed_planner.cpp
   src/behavior_fsm.cpp
   src/nav_core.cpp

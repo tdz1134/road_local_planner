@@ -8,6 +8,7 @@
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/path_smooth.h"
+#include "unk_nav/road_follow.h"
 #include "unk_nav/speed_planner.h"
 #include "unk_nav/subgoal.h"
 
@@ -51,6 +52,7 @@ void NavCore::reset() {
   last_ = NavResult();
   last_path_odom_.clear();
   prev_path_base_.clear();
+  last_path_base_.clear();
   have_prev_path_ = false;
 }
 
@@ -100,9 +102,21 @@ NavResult NavCore::plan(const NavInput& in) {
     work_grid_ = GridMap();
   }
 
-  // ---- 3) 子目标投影（远处终点 → 窗口内可搜索目标）----
+  // ---- 3) 子目标：沿路模式从道路走廊几何取，终点模式从全局终点投影取 ----
+  // 两种来源产出同一个「窗口内车体系子目标」，下游 A*/平滑/限速完全共用。
   subgoal::Result sg;
-  if (in.goal_valid && !work_grid_.empty()) {
+  if (p_.follow_road) {
+    // 无定位：不读 in.goal / in.vehicle_pose，前进方向以车头（base 系 +x）为基准。
+    if (!work_grid_.empty()) {
+      const road::Result rr = road::lookAhead(work_grid_, p_);
+      sg.valid = rr.valid;
+      sg.point = rr.point;
+      sg.reach = rr.reach;
+      sg.truncated_by_obstacle = rr.truncated_by_obstacle;
+      goal_dist = std::hypot(rr.point.x, rr.point.y);  // 仅调试/可视化用
+      goal_bearing = rr.bearing;
+    }
+  } else if (in.goal_valid && !work_grid_.empty()) {
     sg = subgoal::project(work_grid_, goal_base, p_);
   }
 
@@ -110,15 +124,19 @@ NavResult NavCore::plan(const NavInput& in) {
   Path path;
   if (sg.valid) {
     astar::Options ao = makeAstarOptions(p_, work_grid_.resolution);
-    // 一致性软代价：把上帧路径（odom 系）重投影到当前 base 系作为吸引子。
-    // 车已移动，必须重投影，否则一致性带会滞后错位。
-    if (p_.consistency_k > 0.0 && have_prev_path_ && !last_path_odom_.empty()) {
-      prev_path_base_.clear();
-      prev_path_base_.reserve(last_path_odom_.size());
-      for (const auto& pw : last_path_odom_) {
-        prev_path_base_.push_back(geom::globalToBase(pw, in.vehicle_pose));
+    // 一致性软代价：把上帧路径作为吸引子。终点模式存 odom 系、每帧重投影到 base（车已
+    // 移动，必须重投影，否则一致性带会滞后错位）；沿路模式无 pose，直接复用 base 系上帧路径。
+    if (p_.consistency_k > 0.0 && have_prev_path_) {
+      if (p_.follow_road) {
+        ao.prev_path = &last_path_base_;
+      } else if (!last_path_odom_.empty()) {
+        prev_path_base_.clear();
+        prev_path_base_.reserve(last_path_odom_.size());
+        for (const auto& pw : last_path_odom_) {
+          prev_path_base_.push_back(geom::globalToBase(pw, in.vehicle_pose));
+        }
+        ao.prev_path = &prev_path_base_;
       }
-      ao.prev_path = &prev_path_base_;
     }
     path = astar::plan(work_grid_, Point2D{0.0, 0.0}, sg.point, p_.path_spacing, ao, &ws_);
   }
@@ -129,12 +147,14 @@ NavResult NavCore::plan(const NavInput& in) {
   // ---- 6) 行为状态机 ----
   fsm::Context ctx;
   ctx.now = in.now;
-  ctx.goal_valid = in.goal_valid;
+  // 沿路模式任务恒在（只要栅格有效就总有"路"要跟），不依赖全局终点；终点模式沿用 in.goal_valid。
+  ctx.goal_valid = p_.follow_road ? !work_grid_.empty() : in.goal_valid;
   ctx.goal_dist = goal_dist;
   ctx.goal_bearing = goal_bearing;
   ctx.plan_ok = !path.empty();
   ctx.emergency_stop = sp.emergency_stop;
   ctx.current_speed = in.current_speed;
+  ctx.speed_valid = in.speed_valid;
   const NavState st = fsm_.update(ctx);
 
   // ---- 7) 组装输出 ----
@@ -180,12 +200,18 @@ NavResult NavCore::plan(const NavInput& in) {
   r.recommended_speed = sp.emergency_stop ? 0.0 : sp.v;
   if (sp.emergency_stop) oss << " (estop:" << sp.limit_by << ")";
   r.reason = oss.str();
-  // 记住本帧路径（转 odom 系）供下一帧做一致性吸引子。仅成功出路径时更新；
-  // 偶发失败帧保留更早的路径，不因一帧丢记忆。
-  last_path_odom_.clear();
-  last_path_odom_.reserve(path.size());
-  for (const auto& pp : path) {
-    last_path_odom_.push_back(geom::baseToGlobal(pp.p, in.vehicle_pose));
+  // 记住本帧路径供下一帧做一致性吸引子。仅成功出路径时更新；偶发失败帧保留更早的路径，
+  // 不因一帧丢记忆。终点模式存 odom 系（车每帧动，下帧重投影回 base）；沿路模式无 pose，直接存 base 系。
+  if (p_.follow_road) {
+    last_path_base_.clear();
+    last_path_base_.reserve(path.size());
+    for (const auto& pp : path) last_path_base_.push_back(pp.p);
+  } else {
+    last_path_odom_.clear();
+    last_path_odom_.reserve(path.size());
+    for (const auto& pp : path) {
+      last_path_odom_.push_back(geom::baseToGlobal(pp.p, in.vehicle_pose));
+    }
   }
   have_prev_path_ = true;
   last_ = r;

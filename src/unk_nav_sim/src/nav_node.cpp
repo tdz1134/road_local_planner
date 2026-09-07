@@ -11,6 +11,11 @@
 // ROS 侧只传一个私有参数 config_file（文件路径），参数不走参数服务器——
 // 仿真 / 离线 demo / 实车 MDC 共用同一份配置、同一个加载入口。
 //
+// 沿路模式（无定位）：当配置里 follow_road=true（road_follow.launch 传
+// nav_params_road.yaml），NavCore 走 road_follow 从栅格走廊几何直接推子目标，本
+// 节点不再需要全局终点；/odom 仅用于提供 body 系车速（本体感知），规划完全不读
+// pose。此时路径以 base_link 系发布（RViz Fixed Frame 设 base_link）。
+//
 // 话题接口（松耦合，可独立替换）：
 //   订阅：/odom        (nav_msgs/Odometry)     ← 来自 localization_node
 //         /local_grid  (nav_msgs/OccupancyGrid)← 来自 grid_node
@@ -129,15 +134,19 @@ private:
 
   // ── 定时器：规划主循环 ──
   void planCb(const ros::TimerEvent&) {
-    if (!has_odom_ || !has_grid_) return;
+    // 沿路模式只需栅格（不依赖定位/终点）；终点模式仍需 odom 提供 pose。
+    if (!has_grid_ || (!params_.follow_road && !has_odom_)) return;
 
     // ── 1. 组装 NavInput ──
     unk::NavInput in;
     in.now = ros::Time::now().toSec();
     in.vehicle_pose = current_pose_;
     in.goal = goal_;
-    in.goal_valid = goal_valid_;
+    // 沿路模式：不使用全局终点（NavCore 走 road_follow，忽略 goal/pose）
+    in.goal_valid = params_.follow_road ? false : goal_valid_;
     in.current_speed = current_speed_;
+    // 沿路模式前进位移棘轮依赖有效车速；无 odom 时置 false（退化为仅规划失败判定）
+    in.speed_valid = has_odom_;
 
     // OccupancyGrid → unk::GridMap（字段一一对应，直接拷贝）
     in.local_grid = convertGrid(latest_grid_);
@@ -214,22 +223,30 @@ private:
     return m;
   }
 
-  // ── 路径可视化（车体系 → odom 系）──
+  // ── 路径可视化（沿路模式：base_link 系；终点模式：车体系 → odom 系）──
   void publishPathViz(const unk::Path& path) {
     if (path.empty()) return;
 
     nav_msgs::Path viz;
     viz.header.stamp = ros::Time::now();
-    viz.header.frame_id = "odom";
+    // 沿路模式无定位（或无 odom）：路径本就在车体系，直接以 base_link 发布，
+    // RViz Fixed Frame 设 base_link 即见车在原点、走廊随车滚动。
+    const bool base_frame = params_.follow_road || !has_odom_;
+    viz.header.frame_id = base_frame ? "base_link" : "odom";
 
-    double cos_yaw = std::cos(current_pose_.yaw);
-    double sin_yaw = std::sin(current_pose_.yaw);
+    const double cos_yaw = std::cos(current_pose_.yaw);
+    const double sin_yaw = std::sin(current_pose_.yaw);
 
     for (const auto& pt : path) {
       geometry_msgs::PoseStamped ps;
-      // 车体系 → odom 系
-      ps.pose.position.x = current_pose_.x + pt.p.x * cos_yaw - pt.p.y * sin_yaw;
-      ps.pose.position.y = current_pose_.y + pt.p.x * sin_yaw + pt.p.y * cos_yaw;
+      if (base_frame) {
+        ps.pose.position.x = pt.p.x;
+        ps.pose.position.y = pt.p.y;
+      } else {
+        // 车体系 → odom 系
+        ps.pose.position.x = current_pose_.x + pt.p.x * cos_yaw - pt.p.y * sin_yaw;
+        ps.pose.position.y = current_pose_.y + pt.p.x * sin_yaw + pt.p.y * cos_yaw;
+      }
       ps.pose.position.z = 0.1;  // 略高于地面，RViz 里好看
       ps.pose.orientation.w = 1.0;
       viz.poses.push_back(ps);

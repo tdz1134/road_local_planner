@@ -65,6 +65,13 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"recovery_max_retry", kInt, &p->recovery_max_retry},
       // 控制器
       {"pursuit_lookahead", kDouble, &p->pursuit_lookahead},
+      // 沿路模式（无定位）
+      {"follow_road", kBool, &p->follow_road},
+      {"road_fan_half_deg", kDouble, &p->road_fan_half_deg},
+      {"road_fan_step_deg", kDouble, &p->road_fan_step_deg},
+      {"road_lookahead_ratio", kDouble, &p->road_lookahead_ratio},
+      {"road_free_w", kDouble, &p->road_free_w},
+      {"road_align_w", kDouble, &p->road_align_w},
   };
 }
 
