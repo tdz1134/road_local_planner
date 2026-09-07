@@ -1,6 +1,7 @@
 #include "unk_nav/grid_util.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 namespace unk {
@@ -155,6 +156,98 @@ bool findFeasibleCellNear(const GridMap& g, int* gx, int* gy, int max_radius) {
     }
   }
   return false;
+}
+
+// ── DistanceField：截断式障碍距离带 ─────────────────────────────
+
+namespace {
+
+// 代际自增 + 溢出保护，返回新代际。自增即等价于「把整幅 stamp 清零」，成本 O(1)。
+int advanceGen(DistanceField& f) {
+  if (f.gen >= INT_MAX) {
+    std::fill(f.stamp.begin(), f.stamp.end(), 0);
+    f.gen = 0;
+  }
+  return ++f.gen;
+}
+
+// 从 f.queue[0..tail) 的已入队种子向外 8-连通 BFS，只扩展到截断半径。
+// 每格至多入队一次（stamp 守卫）→ tail <= 总格数，不越 queue 容量。
+void bfsExpand(DistanceField& f, int W, int H, int my_gen, int tail) {
+  static const int kDx[8] = {1, 1, 1, 0, 0, -1, -1, -1};
+  static const int kDy[8] = {1, 0, -1, 1, -1, 1, 0, -1};
+  int head = 0;
+  while (head < tail) {
+    const int idx = f.queue[head++];
+    const int cx = idx % W, cy = idx / W;
+    const int cd = f.dist[idx];
+    if (cd >= f.max_dist_cells) continue;  // 到带边界即停，不再外扩
+    for (int d = 0; d < 8; ++d) {
+      const int nx = cx + kDx[d], ny = cy + kDy[d];
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const size_t ni = static_cast<size_t>(ny) * static_cast<size_t>(W) +
+                        static_cast<size_t>(nx);
+      if (f.stamp[ni] == my_gen) continue;  // 已赋值（更近或等距）
+      f.stamp[ni] = my_gen;
+      f.dist[ni] = static_cast<uint8_t>(cd + 1);
+      f.queue[tail++] = static_cast<int>(ni);
+    }
+  }
+}
+
+}  // namespace
+
+void DistanceField::ensure(size_t n, int max_cells) {
+  if (dist.size() == n && max_dist_cells == max_cells) return;
+  dist.assign(n, 0);
+  stamp.assign(n, 0);
+  queue.assign(n, 0);
+  gen = 0;
+  max_dist_cells = max_cells;
+}
+
+void DistanceField::build(const GridMap& g) {
+  if (g.empty() || max_dist_cells <= 0) return;  // 禁用或空图：不构建
+  const int W = g.width, H = g.height;
+  const int my_gen = advanceGen(*this);
+
+  int tail = 0;
+  // 多种子：所有占据格入队，dist=0，stamp 置本代际。
+  // 这一步是全图扫描（读 int8），是唯一与总格数线性相关的开销。
+  for (int gy = 0; gy < H; ++gy) {
+    const size_t row = static_cast<size_t>(gy) * static_cast<size_t>(W);
+    for (int gx = 0; gx < W; ++gx) {
+      const size_t idx = row + static_cast<size_t>(gx);
+      if (g.data[idx] >= kOccupyThreshold) {
+        stamp[idx] = my_gen;
+        dist[idx] = 0;
+        queue[tail++] = static_cast<int>(idx);
+      }
+    }
+  }
+  bfsExpand(*this, W, H, my_gen, tail);
+}
+
+void DistanceField::buildFromPoints(const GridMap& g,
+                                    const std::vector<Point2D>& pts) {
+  if (g.empty() || max_dist_cells <= 0 || pts.empty()) return;
+  const int W = g.width, H = g.height;
+  const int my_gen = advanceGen(*this);
+
+  int tail = 0;
+  // 种子：折线每个点所在的格（同格去重）。窗口外的点忽略。
+  for (const auto& p : pts) {
+    int gx = 0, gy = 0;
+    if (!g.worldToGrid(p.x, p.y, &gx, &gy)) continue;
+    const size_t idx = static_cast<size_t>(gy) * static_cast<size_t>(W) +
+                       static_cast<size_t>(gx);
+    if (stamp[idx] == my_gen) continue;  // 同格已入队
+    stamp[idx] = my_gen;
+    dist[idx] = 0;
+    queue[tail++] = static_cast<int>(idx);
+  }
+  if (tail == 0) return;  // 全部落在窗口外
+  bfsExpand(*this, W, H, my_gen, tail);
 }
 
 }  // namespace grid

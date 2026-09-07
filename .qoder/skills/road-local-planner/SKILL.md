@@ -17,7 +17,7 @@ description: 差速底盘沿路路径规划系统（rlp_*）架构与设计规�
 |---|---|---|
 | 场景 | **有道路先验**的沿路规划 | **无道路先验**的未知环境局部反应式导航 |
 | 输入 | 栅格 + 左右边界 + 定位质量 + 终点 | 栅格 + 位姿 + 车速 + 终点（无边界/走廊概念） |
-| 主流程 | 边界状态机 → 走廊 → 模式路由 → 候选/搜索 → 代价 | 子目标投影 → 局部 A\* → 平滑 → 限速 → 行为 FSM（+ 纯跟踪控制） |
+| 主流程 | 边界状态机 → 走廊 → 模式路由 → 候选/搜索 → 代价 | 子目标投影 → 局部 A\*（障碍距离软代价 + 上帧路径一致性软代价 + tie-break）→ 平滑 → 限速 → 行为 FSM（+ 纯跟踪控制） |
 | 配置 | `rlp_node/config/params.yaml`，rosparam 加载 | `unk_nav/config/nav_params.yaml`（归算法层），经 `params_io::loadNavParams` 读，**不走 rosparam** |
 | 依赖 | 无 ROS 内核 + `rlp_node` ROS 壳 | 纯 C++14 + yaml-cpp（仅 `params_io` 一处），核心零 ROS；`unk_nav_sim` 为 ROS/Gazebo 胶水层 |
 

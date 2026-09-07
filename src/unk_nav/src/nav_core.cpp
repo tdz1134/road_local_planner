@@ -20,6 +20,9 @@ astar::Options makeAstarOptions(const NavParams& p, double resolution) {
   astar::Options o;
   o.unknown_cost = p.unknown_cost;
   o.max_iter = p.astar_max_iter;
+  o.w = p.astar_w;
+  o.soft_k = p.obstacle_cost_k;
+  o.soft_sigma = p.obstacle_cost_sigma;
   // 吸附半径以米给出，这里才换算成格数 → 换分辨率时物理行为不变
   o.goal_snap_radius =
       resolution > 0.0 ? std::max(1, static_cast<int>(std::ceil(p.goal_snap_dist / resolution)))
@@ -46,6 +49,9 @@ void NavCore::reset() {
   have_goal_ = false;
   last_goal_ = Point2D();
   last_ = NavResult();
+  last_path_odom_.clear();
+  prev_path_base_.clear();
+  have_prev_path_ = false;
 }
 
 void NavCore::setParams(const NavParams& p) {
@@ -62,7 +68,12 @@ void NavCore::detectGoalChange(const NavInput& in) {
   const bool moved =
       !have_goal_ || std::hypot(in.goal.x - last_goal_.x, in.goal.y - last_goal_.y) >
                          std::max(p_.goal_tolerance, 0.05);
-  if (moved) fsm_.newGoal();
+  if (moved) {
+    fsm_.newGoal();
+    // 换了目标：上帧路径通往旧目标，不能再当一致性吸引子，否则会把车拽向旧路。
+    have_prev_path_ = false;
+    last_path_odom_.clear();
+  }
   last_goal_ = in.goal;
   have_goal_ = true;
 }
@@ -98,8 +109,18 @@ NavResult NavCore::plan(const NavInput& in) {
   // ---- 4) 局部 A* ----
   Path path;
   if (sg.valid) {
-    path = astar::plan(work_grid_, Point2D{0.0, 0.0}, sg.point, p_.path_spacing,
-                       makeAstarOptions(p_, work_grid_.resolution), &ws_);
+    astar::Options ao = makeAstarOptions(p_, work_grid_.resolution);
+    // 一致性软代价：把上帧路径（odom 系）重投影到当前 base 系作为吸引子。
+    // 车已移动，必须重投影，否则一致性带会滞后错位。
+    if (p_.consistency_k > 0.0 && have_prev_path_ && !last_path_odom_.empty()) {
+      prev_path_base_.clear();
+      prev_path_base_.reserve(last_path_odom_.size());
+      for (const auto& pw : last_path_odom_) {
+        prev_path_base_.push_back(geom::globalToBase(pw, in.vehicle_pose));
+      }
+      ao.prev_path = &prev_path_base_;
+    }
+    path = astar::plan(work_grid_, Point2D{0.0, 0.0}, sg.point, p_.path_spacing, ao, &ws_);
   }
 
   // ---- 5) 速度规划 ----
@@ -159,6 +180,14 @@ NavResult NavCore::plan(const NavInput& in) {
   r.recommended_speed = sp.emergency_stop ? 0.0 : sp.v;
   if (sp.emergency_stop) oss << " (estop:" << sp.limit_by << ")";
   r.reason = oss.str();
+  // 记住本帧路径（转 odom 系）供下一帧做一致性吸引子。仅成功出路径时更新；
+  // 偶发失败帧保留更早的路径，不因一帧丢记忆。
+  last_path_odom_.clear();
+  last_path_odom_.reserve(path.size());
+  for (const auto& pp : path) {
+    last_path_odom_.push_back(geom::baseToGlobal(pp.p, in.vehicle_pose));
+  }
+  have_prev_path_ = true;
   last_ = r;
   return r;
 }

@@ -21,11 +21,22 @@ constexpr double kInf = 1e18;
 struct Cell {
   int x, y;
   double g;  // 起点到当前格的已知代价（单位：格，含 unknown 倍率）
-  double f;  // g + 启发式
+  double h;  // 启发式（到子目标欧氏距离，格单位）—— f 相等时用它 tie-break
+  double f;  // g + w*h
 };
 
 struct CellCmp {
-  bool operator()(const Cell& a, const Cell& b) const { return a.f > b.f; }
+  // min-heap：先按 f 升序；f 相等时按 h 升序（更靠近子目标者优先出队）。
+  // 这条 tie-break 打破直线路径上的 f plateau，扩展数骤降；因为只调整 f 完全
+  // 相等的节点出队顺序，最优代价不变 —— 严格最优性保留。
+  // f、h 都相等时（轴对称镜像的典型情形）再按固定空间键 (y,x) 定序：
+  // 让“三相等”节点的出队顺序与 push 顺序、浮点噪声无关 → 消除非确定性翻转。
+  bool operator()(const Cell& a, const Cell& b) const {
+    if (a.f != b.f) return a.f > b.f;
+    if (a.h != b.h) return a.h > b.h;
+    if (a.y != b.y) return a.y > b.y;
+    return a.x > b.x;
+  }
 };
 
 inline size_t indexOf(int x, int y, int w) {
@@ -90,6 +101,33 @@ Path plan(const GridMap& grid, const Point2D& start, const Point2D& goal,
   Workspace local;
   Workspace& w = (ws_in != nullptr) ? *ws_in : local;
   w.ensure(n);
+  w.last_iter = 0;
+
+  // ---- 障碍软代价：仅 soft_k>0 时才构建截断距离带（关闭时零开销，行为同旧版）----
+  const bool use_soft = opt.soft_k > 0.0 && opt.soft_sigma > 1e-6;
+  double inv_sigma = 0.0;
+  if (use_soft) {
+    // 截断半径 = 3σ：exp(-3)≈0.05，再远的格软代价增量 <5%，视为足够远。
+    const int max_cells =
+        std::max(1, static_cast<int>(std::ceil(3.0 * opt.soft_sigma / grid.resolution)));
+    inv_sigma = 1.0 / opt.soft_sigma;
+    w.dist.ensure(n, max_cells);
+    w.dist.build(grid);
+  }
+  const double res = grid.resolution;
+
+  // ---- 一致性软代价：仅 consistency_k>0 且传入有效上帧路径时才构建 ----
+  // 种子是上帧路径（已换算到当前 base 系），同样用截断距离带，机制与障碍带同构。
+  const bool use_consist = opt.consistency_k > 0.0 && opt.consistency_sigma > 1e-6 &&
+                           opt.prev_path != nullptr && !opt.prev_path->empty();
+  double inv_sigma_p = 0.0;
+  if (use_consist) {
+    const int max_cells_p =
+        std::max(1, static_cast<int>(std::ceil(3.0 * opt.consistency_sigma / grid.resolution)));
+    inv_sigma_p = 1.0 / opt.consistency_sigma;
+    w.prev.ensure(n, max_cells_p);
+    w.prev.buildFromPoints(grid, *opt.prev_path);
+  }
   // 代际自增即等价于「把所有 g_cost 重置为 inf」，但成本是 O(1) 而非 O(n)。
   // 溢出保护：按 10Hz 连续跑也要 6.8 年才会到 INT_MAX。
   if (w.gen >= INT_MAX) {
@@ -106,7 +144,8 @@ Path plan(const GridMap& grid, const Point2D& start, const Point2D& goal,
   std::priority_queue<Cell, std::vector<Cell>, CellCmp> open;
   setG(si, 0.0);
   w.parent[si] = -1;
-  open.push(Cell{sx, sy, 0.0, heuristic(sx, sy, gx, gy)});
+  const double h0 = heuristic(sx, sy, gx, gy);
+  open.push(Cell{sx, sy, 0.0, h0, opt.w * h0});  // f = g + w*h（w=1 时即经典 A*）
 
   int iter = 0;
   bool found = false;
@@ -139,17 +178,32 @@ Path plan(const GridMap& grid, const Point2D& start, const Point2D& goal,
         }
       }
 
-      // unknown 乐观放行但代价略高 → 已知区优先，仍敢于探索未知
-      const double mul = (v == kUnknown) ? std::max(1.0, opt.unknown_cost) : 1.0;
-      const double ng = cur.g + kStep[d] * mul;
       const size_t ni = indexOf(nx, ny, W);
+      // unknown 乐观放行但代价略高 → 已知区优先，仍敢于探索未知
+      double mul = (v == kUnknown) ? std::max(1.0, opt.unknown_cost) : 1.0;
+      // 障碍软代价：离障碍越近进入代价越高 → 路径流向通道中央。因子恒 ≥1，
+      // 与 unknown 倍率相乘后单格代价仍 ≥step → 欧氏启发仍可采纳。
+      if (use_soft) {
+        const double dm = static_cast<double>(w.dist.atIdx(ni)) * res;
+        mul *= 1.0 + opt.soft_k * std::exp(-dm * inv_sigma);
+      }
+      // 一致性代价：偏离上帧路径越远越贵（饱和到 consistency_k）。只加不减，
+      // 单格代价仍 ≥step → 欧氏启发仍可采纳。打破轴对称镜像的 f/g/h 全相等僵局。
+      double step_cost = kStep[d] * mul;
+      if (use_consist) {
+        const double dp = static_cast<double>(w.prev.atIdx(ni)) * res;
+        step_cost += opt.consistency_k * (1.0 - std::exp(-dp * inv_sigma_p));
+      }
+      const double ng = cur.g + step_cost;
       if (ng < getG(ni) - 1e-9) {
         setG(ni, ng);
         w.parent[ni] = static_cast<int>(ci);
-        open.push(Cell{nx, ny, ng, ng + heuristic(nx, ny, gx, gy)});
+        const double nh = heuristic(nx, ny, gx, gy);
+        open.push(Cell{nx, ny, ng, nh, ng + opt.w * nh});
       }
     }
   }
+  w.last_iter = iter;  // 记录本次扩展数（诊断 / tie-break 回归测试用）
   if (!found) return {};
 
   // ---- 回溯：栅格索引 → 格中心世界坐标 ----

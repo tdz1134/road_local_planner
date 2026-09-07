@@ -44,6 +44,11 @@ std::vector<Binding> makeBindings(NavParams* p) {
       // A* 搜索
       {"astar_max_iter", kInt, &p->astar_max_iter},
       {"unknown_cost", kDouble, &p->unknown_cost},
+      {"astar_w", kDouble, &p->astar_w},
+      {"obstacle_cost_k", kDouble, &p->obstacle_cost_k},
+      {"obstacle_cost_sigma", kDouble, &p->obstacle_cost_sigma},
+      {"consistency_k", kDouble, &p->consistency_k},
+      {"consistency_sigma", kDouble, &p->consistency_sigma},
       // 速度规划
       {"safety_margin", kDouble, &p->safety_margin},
       {"t_reaction", kDouble, &p->t_reaction},

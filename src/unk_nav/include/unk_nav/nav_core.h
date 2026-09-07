@@ -42,6 +42,12 @@ class NavCore {
   bool have_goal_ = false;
   Point2D last_goal_;
   NavResult last_;
+
+  // 路径一致性（批次3）：上一帧输出路径存 odom 系，下一帧重投影到当前 base 系
+  // 作为 A* 的一致性吸引子。存 odom 而非 base：车每帧在动，base 系会漂移。
+  std::vector<Point2D> last_path_odom_;   // 上帧路径（odom 系）；空 = 无上帧
+  std::vector<Point2D> prev_path_base_;   // 每帧把 last_path_odom_ 换到当前 base 系的复用缓冲
+  bool have_prev_path_ = false;
 };
 
 }  // namespace unk

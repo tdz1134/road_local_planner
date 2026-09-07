@@ -394,6 +394,39 @@ void testAstar() {
   const unk::Path p11 = unk::astar::plan(sb_inf, origin, {3.0, 0.0}, kSpacing);
   check(!p11.empty(), "clearFootprint 后恢复可规划");
   if (!p11.empty()) check(!pathCollides(sb_inf, p11), "clearFootprint 后路径无碰撞");
+
+  // 12) tie-break by h（f 相等时 h 小者优先出队）：最优性不变 + 扩展数受控 + 加权可选
+  //     空旷大窗口走对角线：整条对角线 f 恒等于最优值（plateau），最能暴露对称翻转。
+  //     默认 w=1.0 靠 h tie-break 沿对角贪心，扩展数远小于全图；路径长仍 = 对角最优。
+  {
+    unk::GridMap big = makeGrid(10.0, 0.05, unk::kFree);  // 200×200 = 4 万格
+    const unk::Point2D s{-4.5, -4.5}, t{4.5, 4.5};        // 一角到对角（纯斜线）
+    unk::astar::Workspace ws;
+    const unk::Path pd =
+        unk::astar::plan(big, s, t, kSpacing, unk::astar::Options(), &ws);
+    check(!pd.empty(), "tie-break：对角长路搜到路径");
+    if (!pd.empty()) {
+      check(!pathCollides(big, pd), "tie-break：路径无碰撞");
+      // 最优长 = 对角欧氏距离 hypot(9,9)=12.728（含格心量化/末点吸附小偏差）。
+      // tie-break 只改 f 相等节点的出队顺序，不改最优代价 → 长度不变。
+      checkNear(pd.back().s, std::hypot(9.0, 9.0), 0.3,
+                "tie-break：路径长≈对角最优（最优性保留）");
+    }
+    // 扩展数受控：全图 4 万格，tie-break 后只扩展对角带附近。上界取 1/4 图作
+    // 宽松护栏（防回归：tie-break 若失效会扩展成大菱形，数量级上万）。实际值会
+    // 打印在下方消息里，稳定后可把这个上界收得更紧。
+    check(ws.last_iter > 0 && ws.last_iter < big.width * big.height / 4,
+          "tie-break：扩展数受控（last_iter=" + std::to_string(ws.last_iter) +
+              " < 10000，全图 40000）");
+
+    // 加权 w=1.05：仍返回可行（无碰撞）路径，代价次优但更省扩展
+    unk::astar::Options wo;
+    wo.w = 1.05;
+    unk::astar::Workspace ws2;
+    const unk::Path pw = unk::astar::plan(big, s, t, kSpacing, wo, &ws2);
+    check(!pw.empty(), "加权 w=1.05：搜到路径");
+    if (!pw.empty()) check(!pathCollides(big, pw), "加权 w=1.05：路径无碰撞");
+  }
 }
 
 // ── subgoal ──────────────────────────────────────────────────────

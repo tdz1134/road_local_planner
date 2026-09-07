@@ -9,6 +9,7 @@
 // 与全局 A* 的本质区别：本搜索的结果只是当前滚动周期内的一段局部路径，
 // 下一周期会在新的栅格上重新搜索，不存在「一次规划到终点」的语义。
 #include "unk_nav/types.h"
+#include "unk_nav/grid_util.h"
 
 namespace unk {
 namespace astar {
@@ -16,9 +17,29 @@ namespace astar {
 struct Options {
   double unknown_cost = 1.4;      // unknown 格代价倍率（>1 偏向已知区，仍可穿越）
   int max_iter = 200000;          // 迭代上限（安全护栏，防止极端栅格下失控）
+  double w = 1.0;                 // 启发式权重 f = g + w*h。1.0=严格最优（默认，靠 h 打破 f 相等的对称）；
+                                  // >1（如 1.05）=加权 A*，扩展更少但代价次优 ≤ w×
   bool allow_unknown = true;      // false 时 unknown 视为不可通行
   bool forbid_corner_cutting = true;  // 对角移动要求两侧正交格均可行（防穿墙角）
   int goal_snap_radius = 10;      // 目标格不可行时的螺旋搜索环数上限
+
+  // 障碍软代价（批次2）：进入单格代价 = step × (1 + soft_k·exp(-d/soft_sigma))，
+  // d 为该格到最近障碍的距离（米，来自截断 DistanceField）。soft_k<=0 关闭（默认，
+  // 不构建距离带 → 零额外开销）。代价因子恒 ≥1 → 单格最小代价 ≥step，
+  // 欧氏启发仍可采纳 → 不破坏最优性与批次1 的 tie-break。
+  double soft_k = 0.0;
+  double soft_sigma = 0.35;       // 距离衰减尺度 m（仅在 soft_k>0 时使用）
+
+  // 一致性软代价（批次3）：进入单格代价再加 consistency_k·(1-exp(-d_prev/consistency_sigma))，
+  // d_prev 为该格到「上一帧路径」的距离（米）。落在上帧路径上 → 加 0，偏离越远越接近
+  // consistency_k（饱和上限）。作用：轴对称镜像两条路 f/g/h 全相等时，tie-break 无法区分，
+  // 而「沿上帧走」因这项而严格更便宜 → 打破对称、消除每帧左右翻烧饼的抖动。
+  // consistency_k<=0 或 prev_path 为空/无效 → 关闭（零开销）。只加不减 → 单格代价仍 ≥step
+  // → 欧氏启发仍可采纳，最优性（对新代价函数）与批次1 tie-break 均不受影响。
+  double consistency_k = 0.0;
+  double consistency_sigma = 0.4;   // 黏性走廊半宽 m（仅在 consistency_k>0 时使用）
+  // 上一帧路径（**当前 base_link 系**，调用方负责把上帧结果换算到本帧车体系）；可空。
+  const std::vector<Point2D>* prev_path = nullptr;
 
   // ---- 路径平滑（见 path_smooth.h，全部为 0 时关闭）----
   double smooth_fillet_radius = 0.0;    // 拐点圆弧倒角半径 m
@@ -40,9 +61,12 @@ struct Workspace {
   std::vector<int> parent;
   std::vector<int> stamp;
   int gen = 0;
+  int last_iter = 0;   // 诊断：上次 plan() 的扩展迭代数（验证 tie-break 减少扩展用）
   std::vector<Point2D> cells;      // 回溯出的格中心点列
   std::vector<Point2D> straight;   // LOS 拉直结果
   std::vector<Point2D> smoothed;   // 平滑结果
+  grid::DistanceField dist;        // 障碍软代价用的距离带（仅 soft_k>0 时构建/复用）
+  grid::DistanceField prev;        // 一致性软代价用的「到上帧路径」距离带（仅 consistency_k>0 时）
 
   void ensure(size_t n);  // 容量不足时重新分配并复位代际
 };

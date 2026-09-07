@@ -13,31 +13,39 @@
 > 验收基准：每批改动都用文末「实测结果」的四场景（空/横墙/浅凹/深凹）跑前后对比，
 > 指标：ARRIVED/ABORT、绕行比、最大曲率、过弯最低速、**每周期耗时**。
 > 新参数一律走三处同步（`types.h` 字段 + `params_io.cpp` 绑定表 + `config/nav_params.yaml`）。
+>
+> **勾选状态**：`[x]` = 已实现 + standalone/catkin 编译通过；带 ⏳ 的表示**尚未在 Gazebo 四场景跑前后对比验证**。
 
 ### 批次 1 —— 小改、零新基础设施（先做）
 
-- [ ] **A\* tie-break by h**：`Cell` 带上 `h`，比较器改成「先比 `f`，`f` 相等再比 `h`（更靠近终点者优先）」。
-      打破直线路径上的 `f` plateau，扩展数骤降且**仍严格最优**。可选再加权 `f=g+w·h`（`w=1.05`，
-      次优 ≤1.05×，默认关）。改动点：`astar.cpp` 的 `CellCmp` / `Cell` / `heuristic`。
+- [x] **A\* tie-break by h** ⏳：`Cell` 带上 `h`，`CellCmp` 改成「先比 `f`，`f` 相等再比 `h`（更靠近终点者优先），
+      `h` 也相等再按固定空间键 `(y,x)`」。打破直线路径 `f` plateau、扩展数骤降且**仍严格最优**；
+      可选加权 `f=g+w·h`（`astar_w`，默认 1.0=关，1.05 次优 ≤1.05×）。已落地：`astar.cpp` 的 `CellCmp`/`Cell`，
+      `Workspace.last_iter` 记扩展数，`core_test` 第 12 组回归。
 - [ ] **子目标自适应前瞻**：终点方向越空、子目标放得越远；越 clutter 放得越近（用「沿射线连续 free 长度」定 reach）。
       改动点：`subgoal.cpp` `project()` 的 `reach` 选择（现固定 `lookahead_ratio×sensor_range`）。
 - [ ] **子目标落在 clutter 之前而非之上**：`reach` 再夹一个「到射线首个障碍距离 − margin」，减少反复 `subgoal_trunc`。
 
 ### 批次 2 —— 新基础设施、解真痛点（最高价值）
 
-- [ ] **距离变换 EDT**：`grid_util` 新增近似 EDT（2-pass chamfer 或分级圆盘）；结果存进 `astar::Workspace` 复用，
-      **维持每周期零堆分配**（勿破坏现有确定性）。`speed_planner` 的障碍距离采样也可复用它。
-- [ ] **A\* 障碍距离软代价**：单格代价 `step×(1+k·exp(-d/σ))`，`d→∞` 时回到 `1.0` → 最小格代价仍 ≥1.0，
-      **欧氏 `h` 保持可采纳**（与批次1 不冲突）。效果：路径流向通道中央、离墙更远、更平滑（ROS costmap `cost_scaling` 同款）。
+- [x] **距离变换 EDT（截断 BFS 距离带）** ⏳：`grid_util` 新增 `DistanceField`——多源 BFS 从占据格出发、
+      深度到 `ceil(3σ/res)` 即停（**非精确 EDT**，喂 `exp(-d/σ)` 无需米级精度）；`uint8` 量化 + 独立代际 stamp，
+      存进 `astar::Workspace` 复用，**维持每周期零堆分配**。唯一 O(全图) 是 `build` 开头找种子的整图扫描；
+      BFS 扩展只 ∝ 障碍邻近带面积，空世界几乎免费。`speed_planner` 的障碍距离采样将来可复用它变查表。
+- [x] **A\* 障碍距离软代价** ⏳：单格代价 `step×(1+k·exp(-d/σ))`（`obstacle_cost_k`/`_sigma`），`d→∞` 回到 `1.0`
+      → 最小格代价仍 ≥1.0，**欧氏 `h` 保持可采纳**（与批次1 不冲突）。`k<=0` 关闭=零开销。效果：路径流向
+      通道中央、离墙更远、更平滑（ROS costmap `cost_scaling` 同款）。yaml 现启用 `k=1.0`。
 - [ ] **膨胀半径调薄**：软代价到位后把 `inflation_radius`（当前实验值 1.5）收到 `robot_radius+~0.15`，
       回归验证「十、TODO 第 1 条」记录的**厚膨胀墙 / 窄通道 ABORT** 是否随之解除。
 
 ### 批次 3 —— 一致性 & 路径质量（依赖前两批结果）
 
-- [ ] **搜索路径一致性**：`nav_core` 的 `last_` 现成（写了但从未被读）。先加①路线切换**滞回**
-      （新路线代价 < 上帧×(1−δ) 才切，否则沿上帧路线重规划）②子目标**限速率/低通**。
-      注意：批次1 的 tie-break 会先消掉大半「对称翻转」，**做完先量残留跳变**，再决定要不要把
-      「离上帧路径距离」作为软代价塞进 A\* 的 `g`。
+- [x] **搜索路径一致性** ⏳：治「轴对称镜像 `f/g/h` 全相等 → tie-break 失效 → 每帧左右翻烧饼」。**根因是代价函数
+      无时间信息，真相等无法从当帧代价区分**。已落地两条：①**一致性软代价**——复用 `DistanceField::buildFromPoints`
+      以「上一帧路径」为种子建带，`g` 里加饱和项 `consistency_k·(1-exp(-d_prev/σ))`，让「沿上帧走」严格更便宜
+      （只加不减 → `h` 仍可采纳）；②`CellCmp` 的**确定性第三键 `(y,x)`** 消除 push 顺序/浮点噪声翻转。上帧路径存
+      **odom 系**（`nav_core::last_path_odom_`）、每帧重投影到 base，车动了才不滞后；换目标/reset 清空。
+      `consistency_k<=0` 关闭=零开销，yaml 现启用 `0.4`。（原计划的「路线切换滞回 + 子目标低通」被这套连续代价方案取代。）
 - [ ] **A\* 路径质量**：批次2 软代价做完后评估残留阶梯；仍明显再上 **Theta\***（any-angle，需把
       `forbid_corner_cutting` 的 LOS 校验搬进搜索）。
 - [ ] **⚠️ 明确不做 JPS**：跳点搜索假设均匀代价，与批次2 的障碍软代价 + `unknown` 倍率**直接冲突**；
@@ -193,8 +201,8 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, r
 |---|---|
 | `types.h` | `GridMap`（`blockedAt`/`feasibleAt`）、`Path`（带弧长与曲率）、`NavParams`、`NavInput`/`NavResult`、`NavState`、`kPi`/`kSqrt2` |
 | `geom_util` | 纯几何，不接触栅格：角度归一化、全局↔车体系变换、弧长、两种重采样、裁剪、点线距、三点曲率、`toPath` |
-| `grid_util` | 只接触栅格：圆盘膨胀核、膨胀、足迹清空、线段/折线通行检查、LOS 拉直、螺旋找可行格 |
-| `astar` | 局部栅格 A\* + 可复用 `Workspace` + 后处理编排 |
+| `grid_util` | 只接触栅格：圆盘膨胀核、膨胀、足迹清空、线段/折线通行检查、LOS 拉直、螺旋找可行格、**截断距离带 `DistanceField`（多源 BFS，供障碍/一致性软代价）** |
+| `astar` | 局部栅格 A\* + 可复用 `Workspace`（含障碍/一致性两张距离带）+ 障碍软代价 + 上帧一致性软代价 + tie-break + 后处理编排 |
 | `path_smooth` | 拐点圆弧倒角 + 拉普拉斯松弛，每步碰撞复验 |
 | `subgoal` | 远处终点 → 窗口内子目标投影（含落点可行性截断） |
 | `speed_planner` | 沿线稠密采样障碍距离、制动包络、四条限速 |
@@ -212,7 +220,7 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, r
 # 方式一：独立构建 —— MDC 交付物形态；唯一外部依赖 yaml-cpp（只有 params_io 一处引用）
 mkdir -p build_standalone && cd build_standalone
 cmake ../src/unk_nav -DCMAKE_BUILD_TYPE=Release && make
-./unk_nav_test      # 198 项断言
+./unk_nav_test      # 198+ 项断言（含 tie-break 第 12 组；批次2/3 改动后尚未重跑计数）
 ./unk_nav_demo      # 闭环 demo
 
 # 方式二：随工作区构建（与 rlp_* 共存开发）
@@ -353,8 +361,9 @@ MDC 是 ARM，按 3~5× 折算，平均约 3~6 ms、最坏约 22~38 ms，仍在�
   即视为未访问）代替每次把 `g_cost` 整体填 inf。于是成本只与**实际扩展的格数**相关，
   与栅格总格数无关。不做这件事，104 万格窗口就是每周期 12 MB 的分配 + memset，
   10 Hz 下 120 MB/s 的内存 churn，还会带来分配器抖动。
-- 剩余唯一随栅格尺寸线性增长的开销是 `grid::inflate` 的整图拷贝与扫描（104 万格约 1 MB）。
-  目前可接受；若将来吃紧，可只对车周感兴趣区域膨胀。
+- 随栅格尺寸线性增长的开销有两处：`grid::inflate` 的整图拷贝与扫描（104 万格约 1 MB），以及
+  **启用障碍软代价时** `DistanceField::build` 的整图种子扫描（读 int8，同量级）。BFS 扩展本身
+  只 ∝ 障碍邻近带面积、被 3σ 截断，空世界几乎免费。目前可接受；若将来吃紧，可只对车周感兴趣区域处理。
 
 ---
 
@@ -423,6 +432,10 @@ MDC 是 ARM，按 3~5× 折算，平均约 3~6 ms、最坏约 22~38 ms，仍在�
 - **接口里不留死状态与死参数**。`NavState` 的每个值都真实产生，`NavParams` 的每个字段
   都真实被读取。集成方按枚举写 switch 时不会遇到永不出现的分支，调参时不会拧到空旋钮。
 - **平滑的每一步都做碰撞复验，失败即回退**。平滑是「锦上添花」，绝不能为了光滑牺牲安全。
+- **真相等的对称只能靠时间信息打破**。轴对称镜像两条路 `f=g+h` 全相等，tie-break（第二关键字 `h`）也相等
+  → 无从区分，车每帧左右翻烧饼。解法是把「离上一帧路径的距离」作为**饱和软代价**加进 `g`（`consistency_k`），
+  让「沿上帧走」严格更便宜；只加不减 → 欧氏 `h` 仍可采纳，最优性对新代价函数保留。上帧路径存 **odom 系**、
+  每帧重投影到 base，车动了才不会滞后错位；软代价有饱和上限 → 原路真被堵死、绕行收益超过它时照样改道，不死抱烂路。
 
 ---
 

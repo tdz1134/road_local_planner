@@ -37,5 +37,36 @@ std::vector<Point2D> shortcut(const GridMap& g, const std::vector<Point2D>& pts)
 // 成功返回 true 并改写 *gx/*gy；max_radius 为搜索环数上限。
 bool findFeasibleCellNear(const GridMap& g, int* gx, int* gy, int max_radius);
 
+// 截断式障碍距离带：多源 BFS 从所有占据格出发，只填充「到最近障碍 <= max_dist_cells」
+// 的格，带外格视为足够远。距离按 8-连通步数存 uint8（Chebyshev 距离，近似欧氏）。
+//
+// 跨周期复用缓冲区 + 代际 stamp（stamp != gen 即视为带外），于是：
+//   · 空世界只有 O(全图) 一次扫描找种子（读 int8，1M 格 ≈ 0.2~0.5 ms），
+//     带内几乎无扩展 → 极便宜；
+//   · 障碍密集时成本上界是带面积，被 max_dist_cells 截断，不随精确欧氏膨胀；
+//   · 栅格尺寸与 max_dist_cells 不变时零堆分配 —— 保持现有每周期零分配约定。
+//
+// 供 A* 障碍软代价 exp(-d/σ) 使用；将来 speed_planner 也可复用同一份。
+struct DistanceField {
+  int max_dist_cells = 0;             // 截断半径（格）；<=0 时 build() 直接返回，视为禁用
+  std::vector<uint8_t> dist;          // 带内格到最近障碍的 BFS 步数（需配 stamp 判定有效性）
+  std::vector<int> stamp;             // 代际标记；stamp[idx] != gen 视为「远」
+  int gen = 0;                        // 当前代际
+  std::vector<int> queue;             // BFS 环形队列，跨周期复用零分配
+
+  // 容量或截断半径变化时重分配并复位代际；两者都不变则直接返回（复用）。
+  void ensure(size_t n, int max_cells);
+  // 用 g 的占据格作为源重建距离带；每次调用 gen 自增（等价于把整幅 stamp 清零）。
+  // 溢出保护：gen 达到 INT_MAX 时把 stamp 整体清零一次（按 10Hz 跑 6.8 年才会触发）。
+  void build(const GridMap& g);
+  // 用一组车体系世界坐标点（如上一帧路径）作为源重建距离带。语义同 build，
+  // 但种子来自给定折线而非栅格里的占据格；落在窗口外的点自动忽略。
+  void buildFromPoints(const GridMap& g, const std::vector<Point2D>& pts);
+  // 按下标查询：命中带内返回 BFS 步数（0=占据格），带外返回 max_dist_cells + 1。
+  int atIdx(size_t idx) const {
+    return stamp[idx] == gen ? static_cast<int>(dist[idx]) : max_dist_cells + 1;
+  }
+};
+
 }  // namespace grid
 }  // namespace unk
