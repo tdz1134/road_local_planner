@@ -1,6 +1,6 @@
 # unk_nav
 
-未知环境下的**局部反应式导航**核心算法。零第三方依赖，只用 C++14 标准库，可交叉编译到华为 MDC。
+未知环境下的**局部反应式导航**核心算法。只用 C++14 标准库；唯一第三方触点 `yaml-cpp` 隔离在 `params_io` 一处（负责 `config/nav_params.yaml` 加载），剔除后核心零依赖，可交叉编译到华为 MDC。
 
 与同工作区的 `rlp_*`（沿路规划）**完全独立**，不复用任何代码，也不引入道路/走廊/边界概念。
 成熟后按文末「融入路径」并入。
@@ -14,7 +14,8 @@
 1. 规划器**只能看到车周有限范围的局部占据栅格**（车体系 `base_link`）；
 2. 终点在局部窗口**之外**，距离远大于窗口尺寸；
 3. 因此**不存在全局地图，也不做全局搜索**。每周期把远处终点沿方向投影进窗口内得到一个
-   **子目标**，在局部栅格上滚动规划（滚动时域）。`astar::plan()` 的 `goal` 参数必须是这个
+   **子目标**（落点撞进膨胀/障碍区时沿射线向车侧回退到最后一个可行点，见 `subgoal`），
+   在局部栅格上滚动规划（滚动时域）。`astar::plan()` 的 `goal` 参数必须是这个
    窗口内子目标，传入真实终点属于误用，会被越界检查直接拒绝；
 4. 环境未知，栅格中有 `unknown` 区，采取**乐观策略**：`unknown` 可通行但代价略高。
 
@@ -48,6 +49,87 @@
 
 ---
 
+## 一·五、坐标系与栅格数组约定
+
+### base_link 车体系
+
+```
+            x（前）
+            ↑
+            │
+   y（左）←─┼─→
+            │
+            🚗 原点 = 车体几何中心
+```
+
+右手系，Z 朝上。yaw = 0 时车头朝 odom 系 X 轴正方向，yaw 逆时针为正。
+
+### 栅格数组布局
+
+`GridMap.data` 是一维数组，行优先（row-major）：
+
+```cpp
+data[gy * width + gx]
+```
+
+| 索引 | 对应坐标 | 车体方向 | 说明 |
+|------|----------|----------|------|
+| `gx`（列）增大 | x 增大 | **车前方** | gx=0 是车后方，gx=width-1 是车前方 |
+| `gy`（行）增大 | y 增大 | **车左侧** | gy=0 是车右侧，gy=height-1 是车左侧 |
+
+车辆位于数组正中心：`(width/2, height/2)`。
+
+### 栅格原点与坐标变换
+
+```
+origin_x = -window_size / 2    ← 栅格 (0,0) 格左下角在 base_link 系的位置
+origin_y = -window_size / 2
+
+车体系坐标 → 栅格索引：
+  gx = floor((x - origin_x) / resolution)
+  gy = floor((y - origin_y) / resolution)
+
+栅格索引 → 格中心车体系坐标：
+  x = origin_x + (gx + 0.5) * resolution
+  y = origin_y + (gy + 0.5) * resolution
+```
+
+### 直观理解（俯视）
+
+```
+        gy 增大（车左）
+        ↑
+        │
+        │   ┌────────────────────┐
+        │   │                    │
+        │   │     data[]         │
+        │   │                    │
+        │   │        🚗          │  ← 车在中心 (w/2, h/2)
+        │   │                    │
+        │   │                    │
+        │   └────────────────────┘
+        │
+        └──────────────────────→ gx 增大（车前）
+```
+
+### 路径坐标系
+
+`NavResult.path` 中每个点 `(x, y)` 也在 **base_link 系**：
+- `path[0]` ≈ `(0, 0)`（车脚下）
+- `x > 0` 表示在车前方，`y > 0` 表示在车左侧
+
+### 与 odom 系的关系
+
+| 数据 | 坐标系 | 说明 |
+|------|----------|------|
+| 栅格 `GridMap` | base_link | 每帧重新生成，车动栅格跟着动 |
+| 规划路径 `NavResult.path` | base_link | “从车脚下往前怎么走” |
+| 终点 `NavInput.goal` | odom | 远处目标，可在窗口外任意远 |
+| 车位姿 `NavInput.vehicle_pose` | odom | 车在世界中的位置和朝向 |
+| 控制器输出 `TwistCmd{v,w}` | base_link | v=前向速度，w=逆时针角速度 |
+
+---
+
 ## 二、模块与数据流
 
 ```
@@ -71,10 +153,11 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, r
 | `grid_util` | 只接触栅格：圆盘膨胀核、膨胀、足迹清空、线段/折线通行检查、LOS 拉直、螺旋找可行格 |
 | `astar` | 局部栅格 A\* + 可复用 `Workspace` + 后处理编排 |
 | `path_smooth` | 拐点圆弧倒角 + 拉普拉斯松弛，每步碰撞复验 |
-| `subgoal` | 远处终点 → 窗口内子目标投影 |
+| `subgoal` | 远处终点 → 窗口内子目标投影（含落点可行性截断） |
 | `speed_planner` | 沿线稠密采样障碍距离、制动包络、四条限速 |
 | `behavior_fsm` | 行为状态机，**全部跨周期记忆都在这里** |
 | `nav_core` | 门面：外部只需认识 `NavCore` + `NavInput` + `NavResult` |
+| `params_io` | 从 `config/nav_params.yaml` 加载 `NavParams`（全库唯一 yaml-cpp 触点；严格校验：未知 key / 类型错 / 文件不存在均拒绝启动，未写的 key 保持代码默认值） |
 
 ---
 
@@ -83,10 +166,10 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, r
 两种方式，都不需要 ROS 运行时。
 
 ```bash
-# 方式一：独立构建 —— 这就是 MDC 交付物的形态，同时证明零依赖
+# 方式一：独立构建 —— MDC 交付物形态；唯一外部依赖 yaml-cpp（只有 params_io 一处引用）
 mkdir -p build_standalone && cd build_standalone
 cmake ../src/unk_nav -DCMAKE_BUILD_TYPE=Release && make
-./unk_nav_test      # 182 项断言
+./unk_nav_test      # 198 项断言
 ./unk_nav_demo      # 闭环 demo
 
 # 方式二：随工作区构建（与 rlp_* 共存开发）
@@ -97,9 +180,10 @@ cd <workspace> && catkin_make
 `CMakeLists.txt` 里的 `find_package(catkin QUIET)` 只在 catkin 环境下生效，独立构建自动跳过。
 **源码中不含任何 ROS 引用**，catkin 只出现在构建脚本里。
 
-当前全部 `#include`：`<algorithm> <chrono> <climits> <cmath> <cstdint> <cstdio> <cstdlib>
+核心库 `#include`：`<algorithm> <climits> <cmath> <cstdint> <cstdio> <cstdlib>
 <limits> <queue> <sstream> <string> <utility> <vector>` + `unk_nav/*`。
-（`<chrono>` 仅 demo 计时用，核心库不含。）
+`params_io.cpp` 额外 include `<yaml-cpp/yaml.h>`——**这是全库唯一第三方触点**，剔除该文件后核心回到零依赖
+（集成方自填 `NavParams` 字段即可）。demo/测试另有 `<chrono>`（计时）、`<fstream>`（写临时 yaml）。
 
 ---
 
@@ -109,11 +193,14 @@ cd <workspace> && catkin_make
 提供）、纯跟踪控制器（实车由控制模块提供）。`NavCore` 的输入输出边界与实车完全一致。
 
 ```bash
-./unk_nav_demo                       # 空世界跑直线（雷达 12m → 窗口 20.4m）
-./unk_nav_demo --goal 30 5           # 指定远处终点
-./unk_nav_demo --obs 5 -4 5.4 4      # 加矩形障碍 x0 y0 x1 y1（可重复多次）
-./unk_nav_demo --range 30            # 换实车尺度雷达，窗口自动变 51m（约 104 万格）
+./unk_nav_demo                                     # 空世界跑直线（代码默认：雷达 12m → 窗口 20.4m）
+./unk_nav_demo --config ../config/nav_params.yaml  # 用与仿真/实车同一份 YAML（推荐）
+./unk_nav_demo --config ... --goal 30 5            # 指定远处终点
+./unk_nav_demo --config ... --obs 5 -4 5.4 4       # 加矩形障碍 x0 y0 x1 y1（可重复多次）
+./unk_nav_demo --range 30                          # 显式覆盖配置里的 sensor_range（换实车尺度：窗口 51m、约 104 万格）
 ```
+
+`--config` 不传则 `NavParams` 用 `types.h` 里的代码默认值；`--range` 无论是否配 `--config` 都会覆盖 `sensor_range`（其他值仍走配置或默认）。
 
 输出：终端进度 + 耗时统计 + ASCII 轨迹图 + `trajectory.csv`。
 
@@ -230,7 +317,7 @@ MDC 是 ARM，按 3~5× 折算，平均约 3~6 ms、最坏约 22~38 ms，仍在�
 
 ## 七、关键参数
 
-`NavParams` 全字段见 `types.h`，这里只说需要理解的几条。
+**参数唯一事实源是 [`config/nav_params.yaml`](config/nav_params.yaml)**——文件头部有症状→参数速查表，仿真 `nav_node`、离线 `--config`、实车/MDC 三方共用。`types.h::NavParams` 里的是代码默认值（yaml 未写的 key 走这份）。加新参数**三处同步**：`types.h` 字段 + `params_io.cpp` 绑定表 + yaml 一行——忘加绑定表也不会静默失效，yaml 里写了未绑定的 key 直接拒绝启动。下面只讲需要理解的几条设计原则。
 
 ### 无量纲化原则
 
@@ -239,7 +326,7 @@ MDC 是 ARM，按 3~5× 折算，平均约 3~6 ms、最坏约 22~38 ms，仍在�
 ```
 局部窗口  = 1.7  × sensor_range     (仿真 20.4 m ← 12 m；实车 51 m ← 30 m)
 前瞻距离  = 0.35 × sensor_range     (lookahead_ratio)
-子目标区间 = 0.10~0.20 × sensor_range (subgoal_min_ratio / subgoal_max_ratio)
+子目标下限 = 0.10 × sensor_range     (subgoal_min_ratio，前瞻的下限保护)
 ```
 
 换车型 / 换雷达只改 `sensor_range` 一个值，整定结果按比例自动迁移。
@@ -273,6 +360,7 @@ MDC 是 ARM，按 3~5× 折算，平均约 3~6 ms、最坏约 22~38 ms，仍在�
 | 6 | **曲率按相邻点估计** | 过弯速度被压到 17% v_max | 见「曲率必须按弧长基线测量」 | `曲率测量基线` 组 |
 | 7 | **基线在端点被夹成不对称** | 端点处冒出 4.91 /m 假曲率尖峰 | 只在能放下完整基线的内点区间计算，区间外沿用边界值 | 同上 |
 | 8 | **平滑后障碍位置放错** | 单测误报 | 测倒角回退时，障碍块压在了原路径所在的格子上，输入折线本身就是撞的。障碍必须严格落在拐角内侧、不碰两条原线段 | `path_smooth` 贴障拐角 |
+| 9 | **子目标盲投影落进膨胀带** | 终点方向有墙且膨胀带比 `goal_snap_dist` 厚时，A* 螺旋吸附逃不出带子 → 周期性 unreachable → 脱困 → ABORT | 投影后做落点可行性截断：沿射线向车侧步进取第一个可行点（`truncated_by_obstacle`，`/unk_nav/state` 显示 `subgoal_trunc`）。中途障碍不管，那是 A* 绕行的职责 | `subgoal` 落点砸墙组 |
 
 ---
 

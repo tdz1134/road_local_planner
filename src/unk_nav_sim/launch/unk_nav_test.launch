@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<!--
+  unk_nav 全链路测试 launch
+  一键启动：Gazebo(200×200m) + Scout v2 + 定位 + 栅格 + 导航 + RViz
+
+  用法：
+    roslaunch unk_nav_sim unk_nav_test.launch
+
+  可选参数：
+    world:=walls    使用 30×30m 墙壁世界（默认 large = 200×200m）
+    gui:=false      无头模式
+-->
+<launch>
+
+  <arg name="world" default="large"/>
+  <arg name="gui" default="true"/>
+
+  <!-- 根据 world 参数选择世界文件 -->
+  <arg name="world_file" default="$(find unk_nav_sim)/worlds/large_world.world"
+       if="$(eval world == 'large')"/>
+  <arg name="world_file" default="$(find unk_nav_sim)/worlds/walls_world.world"
+       if="$(eval world == 'walls')"/>
+
+  <!-- 出生位置 -->
+  <arg name="x"   default="-95.0"/>
+  <arg name="y"   default="-95.0"/>
+  <arg name="yaw" default="0.785"/>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 1. Gazebo + Scout v2                                       -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name"   value="$(arg world_file)"/>
+    <arg name="paused"       value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui"          value="$(arg gui)"/>
+    <arg name="headless"     value="false"/>
+    <arg name="debug"        value="false"/>
+  </include>
+
+  <include file="$(find scout_gazebo_sim)/launch/spawn_scout_v2.launch">
+    <arg name="x"   value="$(arg x)"/>
+    <arg name="y"   value="$(arg y)"/>
+    <arg name="z"   value="0.0"/>
+    <arg name="yaw" value="$(arg yaw)"/>
+  </include>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 2. 定位节点（Gazebo 真值 → /odom + TF）                    -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="localization_node" pkg="unk_nav_sim" type="localization_node"
+        output="screen">
+    <param name="model_name" value="scout/"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 3. 栅格节点（/velodyne_points → /local_grid）              -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="grid_node" pkg="unk_nav_sim" type="grid_node" output="screen">
+    <rosparam file="$(find unk_nav_sim)/config/grid_params.yaml" command="load"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 4. 导航节点（unk_nav 规划核心 + 纯跟踪控制器）             -->
+  <!--    算法参数不走参数服务器：只传配置文件路径，             -->
+  <!--    由 unk::loadNavParams 读 unk_nav 自带的 yaml            -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="nav_node" pkg="unk_nav_sim" type="nav_node" output="screen">
+    <param name="config_file" value="$(find unk_nav)/config/nav_params.yaml"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 5. RViz                                                    -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find unk_nav_sim)/config/unk_nav.rviz"
+        required="false"/>
+
+</launch>

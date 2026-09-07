@@ -1,13 +1,29 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>unk_nav_sim</name>
-  <version>0.1.0</version>
-  <description>Gazebo simulation environment for unk_nav (Scout v2 + Velodyne HDL-32E)</description>
+  <version>0.2.0</version>
+  <description>Gazebo simulation + ROS glue nodes for unk_nav (Scout v2 + Velodyne HDL-32E)</description>
   <maintainer email="dev@example.com">dev</maintainer>
   <license>BSD</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 
+  <!-- 编译依赖 -->
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>gazebo_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>pcl_ros</depend>
+  <depend>pcl_conversions</depend>
+  <depend>unk_nav</depend>
+
+  <!-- 运行依赖（Gazebo 仿真环境） -->
   <exec_depend>gazebo_ros</exec_depend>
   <exec_depend>scout_gazebo_sim</exec_depend>
   <exec_depend>scout_description</exec_depend>

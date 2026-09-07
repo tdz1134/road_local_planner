@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(unk_nav)
 
-# ── 零第三方依赖构建 ──────────────────────────────────────────────────
-# 本包只依赖 C++14 标准库。交付到 MDC 的就是 include/ + src/ 这棵树，
-# 用任意工具链执行下面三步即可独立构建（不需要 catkin、不需要 ROS）：
+# ── 构建说明 ────────────────────────────────────────────────────────
+# 核心算法只依赖 C++14 标准库；唯一的第三方依赖是 yaml-cpp（仅 params_io.cpp
+# 用于读配置文件，纯 C++ 库，MDC 交叉编译无障碍）。
+# 交付到 MDC 的就是 include/ + src/ + config/ 这棵树，独立构建：
 #   mkdir -p /tmp/unk_build && cd /tmp/unk_build
 #   cmake /path/to/src/unk_nav && make
 #   ./unk_nav_test
+#
+# 若目标平台不想引 yaml-cpp：剔除 params_io.cpp，自己填 NavParams 即可，
+# 核心库不受影响（见 include/unk_nav/params_io.h 头注释）。
 #
 # 同时保留 catkin_package() 调用（仅在 catkin 环境下生效），使本包能被
 # 工作区根目录的 catkin_make 一并编入，方便与 rlp_* 共存开发。
@@ -17,6 +21,9 @@ add_compile_options(-std=c++14 -Wall -Wextra)
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
+
+# 唯一的第三方依赖：yaml 配置加载（params_io.cpp）
+find_package(yaml-cpp REQUIRED)
 
 include_directories(include)
 
@@ -32,7 +39,10 @@ add_library(${PROJECT_NAME}_core
   src/speed_planner.cpp
   src/behavior_fsm.cpp
   src/nav_core.cpp
+  src/params_io.cpp
 )
+# PUBLIC：集成方（unk_nav_sim 等）随核心库自动获得 yaml-cpp 链接，无需自己声明
+target_link_libraries(${PROJECT_NAME}_core PUBLIC yaml-cpp)
 
 ##########################
 # 离线单测（裸 main + assert，不依赖 gtest / ROS）
@@ -57,6 +67,8 @@ if(catkin_FOUND)
   catkin_package(
     INCLUDE_DIRS include
     LIBRARIES ${PROJECT_NAME}_core
+    CATKIN_DEPENDS
+    DEPENDS yaml-cpp
   )
   install(TARGETS ${PROJECT_NAME}_core
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

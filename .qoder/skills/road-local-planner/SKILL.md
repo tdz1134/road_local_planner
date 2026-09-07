@@ -1,6 +1,6 @@
 ---
 name: road-local-planner
-description: 差速底盘沿路路径规划系统架构与设计规范。当涉及路径规划、边界管理、走廊构建、模式路由、代价评估时参考此 skill。适用于理解系统分层、修改或新增候选生成算法、调试边界状态机或扩展新规划方法。
+description: 差速底盘沿路路径规划系统（rlp_*）架构与设计规范。当涉及路径规划、边界管理、走廊构建、模式路由、代价评估时参考此 skill。适用于理解系统分层、修改或新增候选生成算法（offset/hybrid/astar/rrt/fan）、调试边界状态机或扩展新规划方法。也用于区分 rlp_* 与平行且独立的 unk_nav（未知环境局部反应式导航）两套系统与各自的配置约定。
 ---
 
 # 沿路路径规划系统
@@ -8,6 +8,22 @@ description: 差速底盘沿路路径规划系统架构与设计规范。当涉�
 ## 系统概述
 
 差速底盘（30km/h）的局部路径规划系统，输入为局部占据栅格、道路边界、全局终点、定位质量。采用分层架构，根据道路/定位情况自动选择规划方法。
+
+## 与 unk_nav 的边界（先认清在改哪套）
+
+工作区里有**两套完全独立**的局部规划系统，不复用任何代码，别混用概念：
+
+| | `rlp_*`（本 skill） | `unk_nav` / `unk_nav_sim` |
+|---|---|---|
+| 场景 | **有道路先验**的沿路规划 | **无道路先验**的未知环境局部反应式导航 |
+| 输入 | 栅格 + 左右边界 + 定位质量 + 终点 | 栅格 + 位姿 + 车速 + 终点（无边界/走廊概念） |
+| 主流程 | 边界状态机 → 走廊 → 模式路由 → 候选/搜索 → 代价 | 子目标投影 → 局部 A\* → 平滑 → 限速 → 行为 FSM（+ 纯跟踪控制） |
+| 配置 | `rlp_node/config/params.yaml`，rosparam 加载 | `unk_nav/config/nav_params.yaml`（归算法层），经 `params_io::loadNavParams` 读，**不走 rosparam** |
+| 依赖 | 无 ROS 内核 + `rlp_node` ROS 壳 | 纯 C++14 + yaml-cpp（仅 `params_io` 一处），核心零 ROS；`unk_nav_sim` 为 ROS/Gazebo 胶水层 |
+
+改 `unk_nav` 前先看 `src/unk_nav/README.md`（本 skill 不展开其细节）。两处约定提醒：
+- **加参数三处同步**：`types.h::NavParams` 字段 + `params_io.cpp` 绑定表 + yaml 一行；未知 key / 类型错直接拒绝启动。
+- **能力边界**：凸障碍可绕；凹槽深于前瞻（`lookahead_ratio × sensor_range`）会落入局部极小 → RECOVERY → ABORT（绕行/脱困已明确排除在范围外）。
 
 ## 四层架构
 
@@ -35,15 +51,16 @@ rlp_common ← rlp_road ← rlp_planner ← rlp_node
 ```
 PlannerRouter → 方法层（follow/search/free，由道路+定位情况路由）
                     └── MethodPlannerBase（注册多个算法，参数切换）
-                          └── 算法层 MethodAlgorithm（offset / hybrid / astar / fan / 新增算法）
+                          └── 算法层 MethodAlgorithm（offset / hybrid / astar / rrt / fan / 新增算法）
 ```
 
-| 情况 | 方法 | 默认算法 | 模式 | 策略 |
-|------|------|----------|------|------|
-| 有路 + 定位差 | `FollowPlanner` | `offset` | 采样 | 走廊内横向偏移族，忽略终点 |
-| 有路 + 定位好 | `SearchPlanner` | `hybrid` | 采样 | 走廊偏移族 + 终点扇形族，代价权衡 |
-| 有路 + 定位好 | `SearchPlanner` | `astar`（可选） | **搜索** | 栅格上 A\* 直接搜索，走廊作为软约束 |
-| 无路 + 定位好 | `FreePlanner` | `fan` | 采样 | 纯终点方向扇形直线 |
+| 情况 | 方法 | 算法（`*_alg` 可选，标★为默认） | 模式 | 策略 |
+|------|------|-----------------------------------|------|------|
+| 有路 + 定位差 | `FollowPlanner` | ★`offset` | 采样 | 走廊内横向偏移族，忽略终点 |
+| 有路 + 定位好 | `SearchPlanner` | ★`hybrid` / `astar` / `rrt` | 采样→搜索 | `hybrid`：走廊偏移族 + 终点扇形族代价权衡；`astar`/`rrt`：栅格直接搜索，走廊作软约束 |
+| 无路 + 定位好 | `FreePlanner` | ★`fan` / `astar` / `rrt` | 采样→搜索 | `fan`：纯终点方向扇形直线；`astar`/`rrt`：无走廊时自动退化为纯栅格搜索 |
+
+> **搜索式算法 `astar` / `rrt` 同时注册在 `SearchPlanner` 与 `FreePlanner`**：有走廊时把走廊当软约束，无走廊时跳过走廊约束退化为纯栅格搜索——同一份搜索代码覆盖“有路绕行”与“无路朝终点”两种场景。参数写错时回退到该方法第一个注册的默认算法。
 
 算法实现位于 `rlp_planner/src/algorithms/`，可复用 `candidate_gen` 中的生成原语（`corridorFamily` / `goalFan` / `lookaheadLength`）。`PlanResult.algorithm` 与 `~status` 话题会输出实际生效的算法名。
 

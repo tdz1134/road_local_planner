@@ -1,24 +1,24 @@
 <?xml version="1.0"?>
 <!--
-  walls_world 启动文件：加载纯墙壁世界 + 生成 Scout v2
-  用法：roslaunch unk_nav_sim walls_world.launch
+  large_world 启动文件：200×200m 大型测试环境 + Scout v2
+  用法：roslaunch unk_nav_sim large_world.launch
   可选参数：
-    x:=5 y:=5 yaw:=1.57   改变机器人出生位置/朝向（yaw 单位 rad）
-    gui:=false            无头模式（不开 Gazebo 图形界面）
+    x:=-95 y:=-95 yaw:=0.785   默认出生点在西南角，朝东北
+    gui:=false                  无头模式（不开 Gazebo 图形界面）
 -->
 <launch>
 
-  <arg name="world_file" default="$(find unk_nav_sim)/worlds/walls_world.world"/>
+  <arg name="world_file" default="$(find unk_nav_sim)/worlds/large_world.world"/>
   <arg name="robot_namespace" default="/"/>
   <arg name="gui" default="true"/>
 
-  <!-- 机器人出生位置（世界坐标） -->
-  <arg name="x"   default="-10.0"/>
-  <arg name="y"   default="-10.0"/>
-  <arg name="z"   default="0.5"/>
-  <arg name="yaw" default="0.0"/>
+  <!-- 机器人出生位置（默认西南角，朝东北） -->
+  <arg name="x"   default="-95.0"/>
+  <arg name="y"   default="-95.0"/>
+  <arg name="z"   default="0.0"/>
+  <arg name="yaw" default="0.785"/>
 
-  <!-- ====== 启动 Gazebo（加载 walls_world）====== -->
+  <!-- ====== 启动 Gazebo（加载 large_world）====== -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="world_name"   value="$(arg world_file)"/>
     <arg name="paused"       value="false"/>

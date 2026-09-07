@@ -12,6 +12,8 @@
 //   ./unk_nav_demo --goal 30 5              # 指定终点
 //   ./unk_nav_demo --obs 5 -3 6 3           # 加一个矩形障碍（可多次），看绕行
 //   ./unk_nav_demo --range 30               # 换实车尺度雷达，窗口自动变 51m（约 100 万格）
+//   ./unk_nav_demo --config ../config/nav_params.yaml   # 用与仿真/实车同一份 YAML 配置
+//                                     # （不传 --config 则用代码默认值；--range 会覆盖配置里的 sensor_range）
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -23,6 +25,7 @@
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/nav_core.h"
+#include "unk_nav/params_io.h"
 #include "unk_nav/types.h"
 
 namespace {
@@ -214,6 +217,8 @@ int main(int argc, char** argv) {
   unk::Point2D goal{30.0, 5.0};
   World world;
   double sensor_range = 12.0;
+  bool range_given = false;
+  std::string config;  // 空 = 用代码默认参数；非空 = 从 YAML 加载（与仿真同一份）
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--goal" && i + 2 < argc) {
@@ -221,6 +226,9 @@ int main(int argc, char** argv) {
       goal.y = std::atof(argv[++i]);
     } else if (a == "--range" && i + 1 < argc) {
       sensor_range = std::atof(argv[++i]);  // 用于实测实车尺度（30m 雷达 → 51m 窗口）
+      range_given = true;
+    } else if (a == "--config" && i + 1 < argc) {
+      config = argv[++i];
     } else if (a == "--obs" && i + 4 < argc) {
       Rect r;
       r.x0 = std::atof(argv[++i]);
@@ -231,9 +239,17 @@ int main(int argc, char** argv) {
     }
   }
 
-  // ---- 规划器参数：无量纲化，所有距离按 sensor_range 缩放 ----
+  // ---- 规划器参数：默认代码值，可被 --config 的 YAML 覆盖 ----
   unk::NavParams p;
-  p.sensor_range = sensor_range;
+  if (!config.empty()) {
+    std::string err;
+    if (!unk::loadNavParams(config, &p, &err)) {
+      std::fprintf(stderr, "[demo] 配置加载失败 [%s]：%s\n", config.c_str(), err.c_str());
+      return 1;
+    }
+    std::printf("[demo] 已加载配置：%s\n", config.c_str());
+  }
+  if (range_given) p.sensor_range = sensor_range;  // 命令行显式指定优先级最高
   const double kWindow = 1.7 * p.sensor_range;  // 无量纲化：窗口 = 1.7 × 雷达量程
   const double kRes = 0.05;
 

@@ -82,6 +82,21 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
   // 又拿不到子目标 → 规划连续失败 → 误触发脱困直至 ABORT。
   if (r.clipped_by_window && reach < p.subgoalMin() * 0.5) return r;
 
+  // ── 落点可行性截断 ──
+  // 盲投影可能把子目标甩进膨胀带（终点方向有墙时），而 A* 的螺旋吸附受
+  // goal_snap_dist 限制、带子一厚就逃不出来 → unreachable。沿射线从落点向
+  // 车侧步进，取第一个可行点：子目标永远直接可搜，不再浪费周期在
+  // 「吸附失败→重试」上。中途障碍不需管：那是 A* 绕行的职责，
+  // 只有「落点本身被占」才是致命的。
+  // 步进半格：可行边界在格尺度上量化，半步足够命中且不超一格误差。
+  const double step = 0.5 * grid.resolution;
+  double t = reach;
+  for (; t > 0.0 && !grid.feasibleAt(ux * t, uy * t); t -= step) {
+  }
+  if (t <= 0.0) return r;  // 整条射线无可行落点（车被膨胀区围死）→ 交给脱困
+  r.truncated_by_obstacle = t < reach - 1e-9;
+  reach = t;
+
   r.reach = reach;
   r.point = Point2D{ux * reach, uy * reach};
   r.valid = true;

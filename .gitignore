@@ -28,3 +28,6 @@ compile_commands.json
 # Python
 __pycache__/
 *.pyc
+
+# demo / 运行产物
+trajectory.csv

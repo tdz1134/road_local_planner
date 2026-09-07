@@ -125,6 +125,9 @@ NavResult NavCore::plan(const NavInput& in) {
   std::ostringstream oss;
   oss << navStateName(st) << "/" << fsm_.detail();
   if (!path.empty()) oss << " limit_by=" << sp.limit_by;
+  // 子目标被膨胀区截断过：终点方向有墙，本周期只走到带子边缘。
+  // 在 /unk_nav/state 里可见，方便区分「正常前进」和「贴带缓行」。
+  if (sg.truncated_by_obstacle) oss << " subgoal_trunc";
 
   // 终态与无效输入：一律停车，且不输出路径（下游不该去跟踪一条通往已结束任务的路）
   if (st == NavState::IDLE || st == NavState::ARRIVED || st == NavState::ABORT) {

@@ -1,14 +1,16 @@
-// 离线单测：裸 main + 自定义断言，不依赖 gtest / ROS / 任何第三方库。
+// 离线单测：裸 main + 自定义断言，不依赖 gtest / ROS（yaml-cpp 仅 params_io 组用到）。
 // 构建后直接运行：./unk_nav_test
 //
-// 覆盖范围（批次 2~4）：
+// 覆盖范围（批次 2~4 + 配置加载）：
 //   geom_util —— 角度归一化、坐标变换、弧长、重采样、裁剪、点线距、曲率
 //   grid_util —— 膨胀核、障碍膨胀、足迹清空、视线检查、LOS 拉直、螺旋找格
 //   astar     —— 直路 / 带缺口墙 / 实心墙 / U 形墙（凹障碍）/ 全 unknown /
 //                越界子目标 / 起点被困 / 迭代护栏 / 禁止穿角 / 膨胀闭口
+//   params_io —— YAML 加载：正常/缺省保留/未知 key/类型错/文件不存在
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,7 @@
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/nav_core.h"
+#include "unk_nav/params_io.h"
 #include "unk_nav/path_smooth.h"
 #include "unk_nav/speed_planner.h"
 #include "unk_nav/subgoal.h"
@@ -432,6 +435,23 @@ void testSubgoal() {
   const unk::GridMap tiny = makeGrid(1.0, 0.05, unk::kFree);  // ±0.5m
   check(!unk::subgoal::project(tiny, {10.0, 0.0}, p).valid, "超小窗口：投影失败返回无效");
 
+  // 落点截断：投影落点正好砸在墙上（lookahead=4.2，墙 x=4.0~4.6）
+  // → 应沿射线回退到墙前最后一个可行点，而不是交给 A* 螺旋吸附
+  unk::GridMap wb = makeGrid(20.0, 0.05, unk::kFree);
+  fillRect(&wb, 4.0, -5.0, 4.6, 5.0, unk::kOccupied);
+  const auto r5 = unk::subgoal::project(wb, {30.0, 0.0}, p);
+  check(r5.valid, "落点砸墙：截断后仍出子目标");
+  check(r5.truncated_by_obstacle, "落点砸墙：截断标志置位");
+  check(r5.point.x < 4.0, "落点砸墙：回退到墙前 (got " + f2s(r5.point.x) + ")");
+  checkNear(r5.point.y, 0.0, 1e-9, "落点砸墙：截断不掰方向");
+  check(!unk::subgoal::project(wb, {3.0, 0.0}, p).truncated_by_obstacle,
+        "落点本来可行：不触发截断");
+
+  // 整条射线无可行落点（车被占区包住）→ 无效，交给上层脱困
+  unk::GridMap box = makeGrid(20.0, 0.05, unk::kFree);
+  fillRect(&box, -0.5, -0.5, 5.5, 0.5, unk::kOccupied);  // 盖住整条前瞻射线
+  check(!unk::subgoal::project(box, {30.0, 0.0}, p).valid, "射线无可行落点：投影无效");
+
   // 退化输入
   check(!unk::subgoal::project(g, {0.0, 0.0}, p).valid, "终点与车重合：返回无效");
   check(!unk::subgoal::project(unk::GridMap(), {3.0, 0.0}, p).valid, "空栅格：返回无效");
@@ -781,8 +801,52 @@ void testSmooth() {
 
 }  // namespace
 
+// ── params_io ──────────────────────────────────────────────────────────────────
+
+void testParamsIo() {
+  group("params_io");
+  const char* path = "/tmp/unk_nav_params_test.yaml";
+  std::string err;
+
+  // 正常加载：写出的字段覆盖，未写的保持默认
+  {
+    std::ofstream f(path);
+    f << "# 注释行\n\n"
+      << "v_max: 1.5\nw_max: 2.5\nastar_max_iter: 12345\n"
+      << "inflate_unknown: true\npursuit_lookahead: 0.9\n";
+  }
+  unk::NavParams p;
+  check(unk::loadNavParams(path, &p, &err), "正常加载");
+  checkNear(p.v_max, 1.5, 1e-12, "double 读入");
+  check(p.astar_max_iter == 12345, "int 读入");
+  check(p.inflate_unknown == true, "bool 读入");
+  checkNear(p.pursuit_lookahead, 0.9, 1e-12, "控制器参数同表读入");
+  checkNear(p.sensor_range, unk::NavParams().sensor_range, 1e-12, "未写字段保持默认");
+
+  // 未知 key → 拒绝（拼错的参数名绝不能静默失效）
+  {
+    std::ofstream f(path);
+    f << "v_maxx: 1.0\n";
+  }
+  unk::NavParams q;
+  check(!unk::loadNavParams(path, &q, &err), "未知 key：拒绝加载");
+  check(err.find("unknown") != std::string::npos, "未知 key：报错含原因");
+
+  // 类型不可转换 → 拒绝
+  {
+    std::ofstream f(path);
+    f << "astar_max_iter: abc\n";
+  }
+  check(!unk::loadNavParams(path, &q, &err), "类型错误：拒绝加载");
+
+  // 文件不存在 → 拒绝
+  check(!unk::loadNavParams("/tmp/definitely_missing_unk_nav_cfg.yaml", &q, &err),
+        "文件不存在：拒绝加载");
+  std::remove(path);
+}
+
 int main() {
-  std::printf("unk_nav core_test —— 离线单测（无 ROS / 无第三方依赖）\n");
+  std::printf("unk_nav core_test —— 离线单测（无 ROS）\n");
   testGeom();
   testGrid();
   testAstar();
@@ -792,6 +856,7 @@ int main() {
   testSpeed();
   testFsm();
   testNavCore();
+  testParamsIo();
   std::printf("\n----------------------------------------\n");
   std::printf("通过 %d 项，失败 %d 项\n", g_pass, g_fail);
   if (g_fail > 0) {

@@ -169,7 +169,6 @@ struct NavParams {
   // ---- 滚动时域规划 ----
   double lookahead_ratio = 0.35;   // 子目标投影距离 = ratio * sensor_range
   double subgoal_min_ratio = 0.10; // 子目标最小距离 = ratio * sensor_range
-  double subgoal_max_ratio = 0.20; // 子目标最大距离 = ratio * sensor_range
   double path_spacing = 0.05;      // 路径等距重采样间距 m
   // 曲率测量基线 m：曲率用弧长相距 ±baseline/2 的两点估计，而非相邻点。
   // 必须 > 0，否则曲率会随 path_spacing 变化（点距 0.05m 时栅格阶梯的微小抖动
@@ -219,12 +218,16 @@ struct NavParams {
   double stuck_dist = 0.05;        // 该时长内朝终点推进小于此值 → 判无进展 m
   int recovery_max_retry = 3;      // 重试上限，超过即 ABORT
 
+  // ---- 控制器（PurePursuitController，见 controller.h）----
+  // 放在 NavParams 里是为了让「一份 yaml 配全部算法参数」成立；
+  // 集成层直接 params.pursuit_lookahead 构造控制器，不再单独走参数服务器。
+  double pursuit_lookahead = 0.5;  // 纯跟踪前视距离 m：调小贴线紧但抖，调大平滑但切内角深
+
   double plan_freq = 10.0;  // 规划频率 Hz
 
   // ---- 派生量（勿手工设置）----
   double lookahead() const { return lookahead_ratio * sensor_range; }
   double subgoalMin() const { return subgoal_min_ratio * sensor_range; }
-  double subgoalMax() const { return subgoal_max_ratio * sensor_range; }
 };
 
 // 单周期输入
