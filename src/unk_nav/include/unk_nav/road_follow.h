@@ -21,6 +21,8 @@
 // θ* 自然偏向空隙 → A* 绕过后正前方又变最远 → 自动回中。
 //
 // 纯 C++14，零 ROS 依赖，只读 GridMap（用 feasibleAt：occupied/越界=false，free/unknown=true）。
+#include <vector>
+
 #include "unk_nav/types.h"
 
 namespace unk {
@@ -32,6 +34,7 @@ struct Result {
   double bearing = 0.0;              // 选中的方向 θ*，rad（0 = 正前方）
   double reach = 0.0;                // 子目标实际距离 m
   bool truncated_by_obstacle = false; // 落点是否因撞进膨胀/障碍区而沿射线回退过
+  std::vector<NavResult::FanCandidate> candidates;  // 扇形候选（调试可视化用，沿路每帧展开故总是非空）
 };
 
 // 从膨胀后的工作栅格中，沿车头前向半球选出道路前瞻子目标。

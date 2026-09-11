@@ -112,13 +112,16 @@ NavResult NavCore::plan(const NavInput& in) {
   if (p_.follow_road) {
     // 无定位：不读 in.goal / in.vehicle_pose，前进方向以车头（base 系 +x）为基准。
     if (!work_grid_.empty()) {
-      const road::Result rr = road::lookAhead(work_grid_, p_);
+      road::Result rr = road::lookAhead(work_grid_, p_);
       sg.valid = rr.valid;
       sg.point = rr.point;
       sg.reach = rr.reach;
       sg.truncated_by_obstacle = rr.truncated_by_obstacle;
-      goal_dist = std::hypot(rr.point.x, rr.point.y);  // 仅调试/可视化用
-      goal_bearing = rr.bearing;
+      sg.candidates = std::move(rr.candidates);  // 扇形候选（调试可视化）
+      if (rr.valid) {
+        goal_dist = std::hypot(rr.point.x, rr.point.y);  // 仅调试/可视化用
+        goal_bearing = rr.bearing;
+      }
     }
   } else if (in.goal_valid && !work_grid_.empty()) {
     sg = subgoal::project(work_grid_, goal_base, p_,
@@ -180,6 +183,9 @@ NavResult NavCore::plan(const NavInput& in) {
   r.state = st;
   r.subgoal = sg.point;
   r.subgoal_reachable = !path.empty();
+  r.fan_candidates = std::move(sg.candidates);  // 扇形候选（调试可视化）
+  r.goal_base = goal_base;
+  r.goal_base_valid = in.goal_valid;
 
   std::ostringstream oss;
   oss << navStateName(st) << "/" << fsm_.detail();

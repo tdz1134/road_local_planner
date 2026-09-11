@@ -1,0 +1,8 @@
+# clangd 配置：指向 catkin 构建产生的编译数据库
+CompileFlags:
+  CompilationDatabase: build/
+  Add:
+    - -std=c++14
+    - -I/opt/ros/noetic/include
+    - -I/home/t/projects/road_local_planner/src/unk_nav/include
+    - -I/home/t/projects/road_local_planner/devel/include

@@ -292,7 +292,20 @@ struct NavResult {
   bool emergency_stop = true;
   Point2D subgoal;                 // 本周期实际使用的子目标（车体系），调试用
   bool subgoal_reachable = false;  // 子目标是否被 A* 搜到
+  Point2D goal_base;               // 终点在车体系的位置（调试/可视化用），无效时={0,0}
+  bool goal_base_valid = false;    // goal_base 是否有效
   std::string reason = "init";     // 调试说明
+
+  // 扇形候选（调试可视化用。终点模式仅扇形展开时非空；沿路模式每帧展开故总是非空）
+  struct FanCandidate {
+    double bearing = 0.0;    // 候选方位角 rad
+    double d_free = 0.0;     // 沿该射线的自由距离 m
+    double reach = 0.0;      // 实际 reach（含净空调整）m
+    double score = 0.0;      // 打分
+    bool feasible = false;   // 是否通过硬门槛
+    bool selected = false;   // 是否被选中
+  };
+  std::vector<FanCandidate> fan_candidates;
 };
 
 }  // namespace unk

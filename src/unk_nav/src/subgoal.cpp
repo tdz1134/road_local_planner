@@ -159,12 +159,14 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
   const double dstep = std::max(p.subgoal_fan_step_deg, 1e-3) * kPi / 180.0;
   const int n_steps = static_cast<int>(std::floor(2.0 * fan_half / dstep + 0.5));
   const double min_reach = p.subgoalMin() * 0.5;
-  const double subgoal_min = p.subgoalMin();
 
   double best_score = -1e18;
   double best_abs_dtheta = 1e18;
   bool found = false;
   int best_idx = 0;
+
+  // 调试用：收集所有候选（仅扇形展开时）
+  r.candidates.reserve(n_steps + 1);
 
   for (int i = 0; i <= n_steps; ++i) {
     const double dtheta = -fan_half + i * dstep;
@@ -181,7 +183,16 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
 
     // 沿射线量自由距离
     const double d_free_i = rayFreeDistance(grid, ux, uy, reach_i, step);
-    if (d_free_i < min_reach) continue;  // 硬门槛
+
+    NavResult::FanCandidate cand;
+    cand.bearing = theta;
+    cand.d_free = d_free_i;
+
+    if (d_free_i < min_reach) {
+      cand.feasible = false;
+      r.candidates.push_back(cand);
+      continue;  // 硬门槛
+    }
 
     // 实际 reach：受 obstacle clearance 调整
     double reach_actual;
@@ -195,17 +206,29 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
       reach_actual = std::max(0.0, d_free_i - p.subgoal_clearance);
       trunc_i = true;
     }
-    if (reach_actual < min_reach) continue;  // 净空后仍不足
+    cand.reach = reach_actual;
+
+    if (reach_actual < min_reach) {
+      cand.feasible = false;
+      r.candidates.push_back(cand);
+      continue;  // 净空后仍不足
+    }
+    cand.feasible = true;
 
     // 打分
     const double align = std::cos(dtheta);  // cos(θ_i - θ_goal) = cos(dtheta)
-    const double free_term = std::min(d_free_i / subgoal_min, 1.0);
+    // 自由距离项：饱和参考 = lookahead（而非 subgoalMin），让被障碍截短的方向
+    // 与开阔方向拉开差距。subgoalMin 太短（≈2m），中心被墙挡在 2m 处时
+    // free_term 就已饱和为 1.0，与侧向 12m 自由空间无法区分 → align_w 恒胜。
+    // 改用 look 后：中心 2m → 0.17，侧向 12m → 1.0，差距 0.83 能压倒 align 的 0.4 优势。
+    const double free_term = std::min(d_free_i / look, 1.0);
     double score = p.subgoal_align_w * align + p.subgoal_free_w * free_term;
 
     // 方向滞后项
     if (prev_bearing) {
       score += p.subgoal_prev_w * std::cos(geom::normalizeAngle(theta - *prev_bearing));
     }
+    cand.score = score;
 
     // 确定性 tie-break：分数相同取 |Δθ| 更小者；仍相同取先遍历到者（负侧）
     const double abs_dt = std::fabs(dtheta);
@@ -213,7 +236,7 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
         (score > best_score - kEps && abs_dt < best_abs_dtheta - kEps)) {
       best_score = score;
       best_abs_dtheta = abs_dt;
-      best_idx = i;
+      best_idx = static_cast<int>(r.candidates.size());
       r.bearing = theta;
       r.reach = reach_actual;
       r.truncated_by_obstacle = trunc_i;
@@ -221,9 +244,15 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
       r.clipped_by_window = (t_win_i < reach_i + kEps);
       found = true;
     }
+    r.candidates.push_back(cand);
   }
 
   if (!found) { r.fail = FailReason::kNoCandidate; return r; }
+
+  // 标记选中候选
+  if (best_idx >= 0 && best_idx < static_cast<int>(r.candidates.size())) {
+    r.candidates[best_idx].selected = true;
+  }
 
   r.fan_used = (best_idx != 0 || std::fabs(-fan_half + best_idx * dstep) > kEps);
   r.point = Point2D{std::cos(r.bearing) * r.reach, std::sin(r.bearing) * r.reach};

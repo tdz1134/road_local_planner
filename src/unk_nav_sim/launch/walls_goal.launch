@@ -1,36 +1,35 @@
 <?xml version="1.0"?>
 <!--
-  unk_nav 全链路测试 launch
-  一键启动：Gazebo(200×200m) + Scout v2 + 定位 + 栅格 + 导航 + RViz
+  walls_goal.launch：30×30m 墙壁迷宫 + 有定位 + 终点导航
+  一键启动：Gazebo(walls_world) + Scout v2 + 定位 + 栅格 + 导航(终点模式) + RViz
+
+  与 open_goal.launch 的区别：
+    · 世界：walls_world（30×30m 室内迷宫，墙壁隔出多条通道）
+    · 出生点：西南角 (-10, -10)，车头朝 +X
+    · 适合测试：窄通道绕行、多拐角、死胡同 → RECOVERY/ABORT
 
   用法：
-    roslaunch unk_nav_sim unk_nav_test.launch
+    roslaunch unk_nav_sim walls_goal.launch
+    在 RViz 工具栏点 "2D Nav Goal" 设定终点。
 
   可选参数：
-    world:=walls    使用 30×30m 墙壁世界（默认 large = 200×200m）
-    gui:=false      无头模式
+    gui:=false   无头模式
+    x/y/yaw      出生位姿
 -->
 <launch>
 
-  <arg name="world" default="large"/>
   <arg name="gui" default="true"/>
 
-  <!-- 根据 world 参数选择世界文件 -->
-  <arg name="world_file" default="$(find unk_nav_sim)/worlds/large_world.world"
-       if="$(eval world == 'large')"/>
-  <arg name="world_file" default="$(find unk_nav_sim)/worlds/walls_world.world"
-       if="$(eval world == 'walls')"/>
-
-  <!-- 出生位置 -->
-  <arg name="x"   default="-95.0"/>
-  <arg name="y"   default="-95.0"/>
+  <!-- 出生位置：西南角，朝东北 -->
+  <arg name="x"   default="-10.0"/>
+  <arg name="y"   default="-10.0"/>
   <arg name="yaw" default="0.785"/>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 1. Gazebo + Scout v2                                       -->
+  <!-- 1. Gazebo + walls_world（墙壁迷宫）                       -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
-    <arg name="world_name"   value="$(arg world_file)"/>
+    <arg name="world_name"   value="$(find unk_nav_sim)/worlds/walls_world.world"/>
     <arg name="paused"       value="false"/>
     <arg name="use_sim_time" value="true"/>
     <arg name="gui"          value="$(arg gui)"/>
@@ -38,6 +37,9 @@
     <arg name="debug"        value="false"/>
   </include>
 
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 2. Scout v2（含 Velodyne HDL-32E + robot_state_publisher）  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
   <include file="$(find scout_gazebo_sim)/launch/spawn_scout_v2.launch">
     <arg name="x"   value="$(arg x)"/>
     <arg name="y"   value="$(arg y)"/>
@@ -46,7 +48,7 @@
   </include>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 2. 定位节点（Gazebo 真值 → /odom + TF）                    -->
+  <!-- 3. 定位节点（Gazebo 真值 → /odom + TF）                    -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="localization_node" pkg="unk_nav_sim" type="localization_node"
         output="screen">
@@ -54,23 +56,22 @@
   </node>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 3. 栅格节点（/velodyne_points → /local_grid）              -->
+  <!-- 4. 栅格节点（/velodyne_points → /local_grid）              -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="grid_node" pkg="unk_nav_sim" type="grid_node" output="screen">
     <rosparam file="$(find unk_nav_sim)/config/grid_params.yaml" command="load"/>
   </node>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 4. 导航节点（unk_nav 规划核心 + 纯跟踪控制器）             -->
-  <!--    算法参数不走参数服务器：只传配置文件路径，             -->
-  <!--    由 unk::loadNavParams 读 unk_nav 自带的 yaml            -->
+  <!-- 5. 导航节点（终点模式：nav_params.yaml）                    -->
+  <!--    RViz "2D Nav Goal" 点终点 → /move_base_simple/goal     -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="nav_node" pkg="unk_nav_sim" type="nav_node" output="screen">
     <param name="config_file" value="$(find unk_nav)/config/nav_params.yaml"/>
   </node>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 5. RViz                                                    -->
+  <!-- 6. RViz（Fixed Frame=odom，"2D Nav Goal" 点终点）          -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="rviz" pkg="rviz" type="rviz"
         args="-d $(find unk_nav_sim)/config/unk_nav.rviz"

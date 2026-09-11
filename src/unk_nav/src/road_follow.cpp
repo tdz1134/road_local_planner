@@ -27,6 +27,10 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p) {
 
   double best_score = -1e18;
   bool found = false;
+  int best_idx = 0;
+
+  // 调试用：收集所有扇形候选（沿路模式本就每帧展开扇形，仅顺带记录，不改决策）
+  r.candidates.reserve(n_steps + 1);
 
   for (int i = 0; i <= n_steps; ++i) {
     const double th = -half + i * dstep;
@@ -48,15 +52,28 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p) {
     // 打分 = 自由距离（归一化到 [0,1]）× 权重 + 车头对齐 cosθ × 权重。
     const double free_term = std::min(d, L) / L;
     const double score = p.road_free_w * free_term + p.road_align_w * std::cos(th);
+
+    NavResult::FanCandidate cand;
+    cand.bearing = th;
+    cand.d_free = d;
+    cand.reach = d;  // 沿路落点无净空回退，reach 即自由距离
+    cand.score = score;
+    cand.feasible = (d >= step);  // 硬门槛：至少一格可行落点（与 L63 判定一致）
+
     if (score > best_score) {
       best_score = score;
+      best_idx = static_cast<int>(r.candidates.size());
       r.bearing = th;
       r.reach = d;
       found = true;
     }
+    r.candidates.push_back(cand);
   }
 
   if (!found) return r;
+
+  // 标记选中候选（即使随后因 reach < step 判为无效，选中关系仍有调试价值）
+  r.candidates[best_idx].selected = true;
 
   // 选中方向连一格可行落点都没有（车被走廊尽头/障碍围死）→ 无前向可走。
   // 交由上层：nav_core 得不到子目标 → checkPlanFail → RECOVERY → ABORT。

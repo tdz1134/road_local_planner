@@ -45,7 +45,7 @@ sensor_range: 20.0          # 激光有效量程 m。lookahead/subgoal_min 都�
 # 膨胀半径 = robot_radius + 跟踪误差余量。余量是给控制器跟踪误差留的：
 # 路径只保证中心线有 (inflation_radius - robot_radius) 的净空。
 # 注意：膨胀带两侧总宽 2×inflation，太大会把窄通道整个堵死 → 频繁 RECOVERY。
-inflation_radius: 1.5       # 【当前实验值，偏大】推荐 0.7~0.9；若 goal_snap_dist <
+inflation_radius: 0.7      # 【当前实验值，偏大】推荐 0.7~0.9；若 goal_snap_dist <
                             # 带半宽，子目标落进带里时 A* 吸附逃不出（现已由射线截断兜底）
 footprint_clear_radius: 0.50  # 车体足迹清空半径 m（膨胀后把车脚下掏空，防起点死锁）。
                               # 必须 ≥ robot_radius 且 < inflation_radius

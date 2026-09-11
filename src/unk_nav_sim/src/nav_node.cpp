@@ -38,6 +38,7 @@
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <std_msgs/String.h>
+#include <visualization_msgs/Marker.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/utils.h>
 
@@ -91,6 +92,10 @@ public:
     pub_state_ = nh.advertise<std_msgs::String>("/unk_nav/state", 1, true);
     pub_work_grid_ =
         nh.advertise<nav_msgs::OccupancyGrid>("/unk_nav/work_grid", 1, true);
+    pub_fan_ =
+        nh.advertise<visualization_msgs::Marker>("/unk_nav/fan_candidates", 1);
+    pub_goal_ =
+        nh.advertise<visualization_msgs::Marker>("/unk_nav/goal_marker", 1);
 
     // ── 规划定时器 ──
     timer_ = nh.createTimer(ros::Duration(1.0 / params_.plan_freq), &NavNode::planCb, this);
@@ -186,6 +191,12 @@ private:
     // ── 5. 发布路径可视化 ──
     publishPathViz(result.path);
 
+    // ── 6. 发布扇形候选可视化（调试：蓝色=候选，红色=选中）──
+    publishFanCandidates(result);
+
+    // ── 7. 发布终点 Marker（base_link 系绿色圆柱）──
+    publishGoalMarker(result);
+
     // 调试日志（1Hz 节流）
     ROS_INFO_THROTTLE(1.0,
         "[nav_node] state=%s speed=%.2f path_pts=%zu reason=%s",
@@ -271,8 +282,78 @@ private:
 
   // ROS
   ros::Subscriber sub_odom_, sub_grid_, sub_goal_;
-  ros::Publisher pub_cmd_, pub_path_, pub_state_, pub_work_grid_;
+  ros::Publisher pub_cmd_, pub_path_, pub_state_, pub_work_grid_, pub_fan_, pub_goal_;
   ros::Timer timer_;
+
+  // ── 发布扇形候选可视化 ──
+  // 单个 LINE_LIST Marker + 逐顶点着色：蓝色=候选射线，红色=选中
+  void publishFanCandidates(const unk::NavResult& result) {
+    // 蓝色：候选射线
+    std_msgs::ColorRGBA blue;
+    blue.r = 0.2; blue.g = 0.5; blue.b = 1.0; blue.a = 0.6;
+    // 红色：选中
+    std_msgs::ColorRGBA red;
+    red.r = 1.0; red.g = 0.1; red.b = 0.1; red.a = 0.95;
+
+    visualization_msgs::Marker m;
+    m.header.frame_id = "base_link";
+    m.header.stamp = ros::Time::now();
+    m.ns = "fan";
+    m.id = 0;
+    m.type = visualization_msgs::Marker::LINE_LIST;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = 0.06;
+
+    for (const auto& cand : result.fan_candidates) {
+      if (!cand.feasible) continue;
+      geometry_msgs::Point p0, p1;
+      p0.x = 0; p0.y = 0; p0.z = 0.06;
+      p1.x = std::cos(cand.bearing) * cand.d_free;
+      p1.y = std::sin(cand.bearing) * cand.d_free;
+      p1.z = 0.06;
+      m.points.push_back(p0);
+      m.points.push_back(p1);
+      const std_msgs::ColorRGBA& c = cand.selected ? red : blue;
+      m.colors.push_back(c);
+      m.colors.push_back(c);
+    }
+
+    if (m.points.empty()) {
+      // 无可行候选：发 DELETE 清除上一帧，不发空 LINE_LIST（RViz 报错）
+      m.action = visualization_msgs::Marker::DELETE;
+    } else {
+      m.action = visualization_msgs::Marker::ADD;
+    }
+    pub_fan_.publish(m);
+  }
+
+  // ── 发布终点 Marker（base_link 系绿色圆柱）──
+  void publishGoalMarker(const unk::NavResult& result) {
+    visualization_msgs::Marker m;
+    m.header.frame_id = "base_link";
+    m.header.stamp = ros::Time::now();
+    m.ns = "goal";
+    m.id = 0;
+    m.type = visualization_msgs::Marker::CYLINDER;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = 0.3;  // 直径
+    m.scale.y = 0.3;
+    m.scale.z = 0.6;  // 高度
+    m.color.r = 0.0;
+    m.color.g = 1.0;
+    m.color.b = 0.0;
+    m.color.a = 0.8;
+
+    if (result.goal_base_valid) {
+      m.action = visualization_msgs::Marker::ADD;
+      m.pose.position.x = result.goal_base.x;
+      m.pose.position.y = result.goal_base.y;
+      m.pose.position.z = 0.3;  // 圆柱中心抬高，底部贴地
+    } else {
+      m.action = visualization_msgs::Marker::DELETE;
+    }
+    pub_goal_.publish(m);
+  }
 };
 
 int main(int argc, char** argv) {

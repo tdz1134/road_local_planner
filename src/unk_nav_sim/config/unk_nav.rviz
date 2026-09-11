@@ -119,6 +119,22 @@ Visualization Manager:
       Use rainbow: true
       Value: true
 
+    # 扇形候选可视化（蓝色=候选射线，红色=选中；仅中心被截短时出现）
+    - Class: rviz/Marker
+      Enabled: true
+      Name: FanCandidates
+      Marker Topic: /unk_nav/fan_candidates
+      Queue Size: 1
+      Value: true
+
+    # 终点 Marker（base_link 系绿色圆柱）
+    - Class: rviz/Marker
+      Enabled: true
+      Name: Goal
+      Marker Topic: /unk_nav/goal_marker
+      Queue Size: 1
+      Value: true
+
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

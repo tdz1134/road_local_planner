@@ -61,6 +61,7 @@ struct Result {
   bool goal_limited = false;     // reach 是否被终点距离限制（末段收敛）
   bool fan_used = false;         // 是否使用了扇形展开（而非中心直射）
   FailReason fail = FailReason::kNone;  // 失败原因
+  std::vector<NavResult::FanCandidate> candidates;  // 扇形候选（调试用，仅 fan_used 时非空）
 };
 
 // 沿终点方向投影（中心优先 + 截断才扇形展开）。

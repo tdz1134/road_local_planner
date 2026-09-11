@@ -11,6 +11,7 @@ void BehaviorFsm::reset() {
   detail_ = "reset";
   fail_active_ = false;
   fail_since_ = 0.0;
+  abort_recovery_count_ = 0;
   progress_valid_ = false;
   road_progress_valid_ = false;
   road_adv_ = road_adv_base_ = road_adv_t0_ = road_adv_last_t_ = 0.0;
@@ -18,11 +19,11 @@ void BehaviorFsm::reset() {
 
 void BehaviorFsm::newGoal() {
   // 新终点：清掉锁存终态与重试计数。
-  // 无进展棘轮也必须作废 —— 新终点的距离标度完全不同，沿用旧的 best_goal_dist_
-  // 会让车在下一周期立刻被判「无进展」。
+  // 无进展棘轮也必须作废 
   if (state_ == NavState::ARRIVED || state_ == NavState::ABORT) state_ = NavState::GO;
   retry_ = 0;
   fail_active_ = false;
+  abort_recovery_count_ = 0;
   progress_valid_ = false;
   road_progress_valid_ = false;
   road_adv_ = road_adv_base_ = road_adv_t0_ = road_adv_last_t_ = 0.0;
@@ -36,6 +37,7 @@ NavState BehaviorFsm::onStuckTriggered(const char* detail) {
   // 重试次数转 ABORT，RECOVERY 根本没起到「等栅格更新后重试」的作用。
   fail_active_ = false;
   progress_valid_ = false;
+  abort_recovery_count_ = 0;
   road_progress_valid_ = false;  // 沿路棘轮也作废，给一个完整的 stuck_time 窗口重新证明
   if (retry_ > p_.recovery_max_retry) {
     state_ = NavState::ABORT;
@@ -130,14 +132,35 @@ NavState BehaviorFsm::update(const Context& ctx) {
     return state_;
   }
 
-  // ---- 2) 终态锁存 ----
+  // ---- 2) 终态锁存 + ABORT 自动恢复 ----
   if (state_ == NavState::ARRIVED) {
     detail_ = "arrived, latched";
     return state_;
   }
+  // ABORT 自动恢复：连续 plan_ok 达到阈值（且非急停）说明遮挡已消失，
+  // 自动回到 GO 继续规划，避免一次性遮挡导致永久放弃。
   if (state_ == NavState::ABORT) {
-    detail_ = "aborted, latched";
-    return state_;
+    if (ctx.plan_ok && !ctx.emergency_stop) {
+      ++abort_recovery_count_;
+      if (abort_recovery_count_ >= 5) {
+        state_ = NavState::GO;
+        retry_ = 0;
+        abort_recovery_count_ = 0;
+        fail_active_ = false;
+        progress_valid_ = false;
+        road_progress_valid_ = false;
+        road_adv_ = road_adv_base_ = road_adv_t0_ = road_adv_last_t_ = 0.0;
+        detail_ = "auto-recovered from abort";
+        // 不 return，继续走下面的正常 GO 流程
+      } else {
+        detail_ = "abort, waiting recovery";
+        return state_;
+      }
+    } else {
+      abort_recovery_count_ = 0;
+      detail_ = "aborted, latched";
+      return state_;
+    }
   }
 
   // ---- 3) 到达判定 ----

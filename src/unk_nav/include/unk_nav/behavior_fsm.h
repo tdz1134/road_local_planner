@@ -66,6 +66,10 @@ class BehaviorFsm {
   bool fail_active_ = false;
   double fail_since_ = 0.0;
 
+  // ABORT 自动恢复计数：ABORT 后若连续 plan_ok 达到阈值，自动回 GO
+  // （避免一次性遮挡导致永久放弃，需上层重新发终点才能恢复）
+  int abort_recovery_count_ = 0;
+
   // 无进展棘轮：记录「历史最好终点距离」及其取得时刻。
   // 只有实质性地更接近终点才刷新，否则计时一直累加。
   bool progress_valid_ = false;
