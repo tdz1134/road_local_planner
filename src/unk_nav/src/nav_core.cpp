@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <sstream>
 
 #include "unk_nav/astar.h"
@@ -54,6 +55,7 @@ void NavCore::reset() {
   prev_path_base_.clear();
   last_path_base_.clear();
   have_prev_path_ = false;
+  have_last_bearing_ = false;
 }
 
 void NavCore::setParams(const NavParams& p) {
@@ -75,6 +77,8 @@ void NavCore::detectGoalChange(const NavInput& in) {
     // 换了目标：上帧路径通往旧目标，不能再当一致性吸引子，否则会把车拽向旧路。
     have_prev_path_ = false;
     last_path_odom_.clear();
+    // 换终点不能沿用旧方向记忆
+    have_last_bearing_ = false;
   }
   last_goal_ = in.goal;
   have_goal_ = true;
@@ -117,7 +121,8 @@ NavResult NavCore::plan(const NavInput& in) {
       goal_bearing = rr.bearing;
     }
   } else if (in.goal_valid && !work_grid_.empty()) {
-    sg = subgoal::project(work_grid_, goal_base, p_);
+    sg = subgoal::project(work_grid_, goal_base, p_,
+                          have_last_bearing_ ? &last_subgoal_bearing_ : nullptr);
   }
 
   // ---- 4) 局部 A* ----
@@ -142,7 +147,20 @@ NavResult NavCore::plan(const NavInput& in) {
   }
 
   // ---- 5) 速度规划 ----
-  const speed::Result sp = speed::limit(path, work_grid_, in.current_speed, p_);
+  // 停车视距：仅终点模式接入。子目标被膨胀带截断 → 停在膨胀带边缘前；
+  // 子目标即终点（goal_limited）→ 停在终点，消除 v_max 冲过终点的过冲。
+  // road 模式本轮不接入：rr.truncated_by_obstacle 的语义包含“走廊弯曲”，
+  // 直接当停车视距会在弯道上无谓减速。
+  double stop_horizon = std::numeric_limits<double>::infinity();
+  if (!p_.follow_road && sg.valid) {
+    if (sg.truncated_by_obstacle) {
+      stop_horizon = std::min(stop_horizon, sg.ray_free_dist);
+    }
+    if (sg.goal_limited) {
+      stop_horizon = std::min(stop_horizon, sg.reach);
+    }
+  }
+  const speed::Result sp = speed::limit(path, work_grid_, in.current_speed, p_, stop_horizon);
 
   // ---- 6) 行为状态机 ----
   fsm::Context ctx;
@@ -169,6 +187,7 @@ NavResult NavCore::plan(const NavInput& in) {
   // 子目标被膨胀区截断过：终点方向有墙，本周期只走到带子边缘。
   // 在 /unk_nav/state 里可见，方便区分「正常前进」和「贴带缓行」。
   if (sg.truncated_by_obstacle) oss << " subgoal_trunc";
+  if (sg.fan_used) oss << " subgoal_fan";
 
   // 终态与无效输入：一律停车，且不输出路径（下游不该去跟踪一条通往已结束任务的路）
   if (st == NavState::IDLE || st == NavState::ARRIVED || st == NavState::ABORT) {
@@ -184,8 +203,8 @@ NavResult NavCore::plan(const NavInput& in) {
     r.emergency_stop = true;
     r.recommended_speed = 0.0;
     if (!sg.valid) {
-      oss << " (no subgoal";
-      if (work_grid_.empty()) oss << ": empty grid";
+      oss << " (no subgoal: " << subgoal::failReasonName(sg.fail);
+      if (work_grid_.empty()) oss << " / empty grid";
       oss << ")";
     } else {
       oss << " (subgoal unreachable)";
@@ -214,6 +233,11 @@ NavResult NavCore::plan(const NavInput& in) {
     }
   }
   have_prev_path_ = true;
+  // 存本帧子目标方位角供下帧方向滞后用
+  if (sg.valid && !p_.follow_road) {
+    last_subgoal_bearing_ = sg.bearing;
+    have_last_bearing_ = true;
+  }
   last_ = r;
   return r;
 }

@@ -25,6 +25,9 @@
 # 到点不停/停太偏       → goal_tolerance↓
 # 卡住不放弃/放弃太快   → stuck_time、recovery_max_retry
 # 路径爱穿未知区        → unknown_cost↑（1=无所谓，越大越躲开 unknown）
+# 贴墙不减速/冲过终点   → stop_horizon 自动生效，查 limit_by=subgoal_horizon
+# 凹槽内振荡不绕        → subgoal_fan_half_deg↑、subgoal_align_w↓
+# 终点贴墙到不了 ABORT  → goal_clear_radius ≥ inflation_radius
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── 车辆能力（Scout v2 差速底盘）──
@@ -62,6 +65,21 @@ goal_tolerance: 0.5         # 到达判定距离 m（只判距离不判航向）
                             # 终点附近墨迹→调大
 goal_snap_dist: 1.0         # A* 子目标落在障碍格时的螺旋吸附半径 m。
                             # 应 ≥ inflation_radius 才有逃生能力（射线截断已兜底，此为双保险）
+# 子目标扇形选取（终点模式专用，沿路模式不读）
+# 中心方向被障碍截断时展开扇形候选，打分选优。
+# subgoal_fan_half_deg=0 + subgoal_clearance=0 → 选取行为退回旧版单射线
+subgoal_fan_half_deg: 90.0   # 扇形半角 deg；0=关闭扇形，退回单射线
+subgoal_fan_step_deg: 5.0    # 扇形角步长 deg
+subgoal_align_w: 3.0         # 终点对齐权重 cos(θ-θ_goal)；必须 > subgoal_free_w
+subgoal_free_w: 1.0          # 饱和自由距离权重（饱和参考 = subgoalMin()）
+subgoal_prev_w: 1.0          # 上帧方向一致性权重；0=关闭滞后（防翻烧饼）
+subgoal_clearance: 0.3       # 截断时子目标与膨胀带边缘的净空 m；0=复现旧行为
+                              # 约等于 obstacle_cost_sigma，让子目标自带净空
+                              # 不与 A* 的障碍软代价在路径末段对打
+goal_clear_radius: 0.0        # 终点清洞半径 m；0=关闭（终点贴墙场景才需要）
+                              # 注意：清洞半径 < inflation_radius 时，终点周边会被膨胀带
+                              # 围成孤岛，A* 反而无解；要真让“贴墙终点”可达，
+                              # 须设 goal_clear_radius ≥ inflation_radius
 plan_freq: 10.0             # 规划频率 Hz。反应延迟 ≈ 1/freq + 控制周期，高速时可调高
 
 # ── A* 搜索 ──

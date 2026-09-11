@@ -39,6 +39,15 @@ path_spacing: 0.05
 curvature_baseline: 0.30
 goal_tolerance: 0.5         # （沿路模式无终点，不触发到达判定）
 goal_snap_dist: 1.0         # 子目标落障碍格时的螺旋吸附半径 m（road 子目标已保证可行，此为双保险）
+# 子目标扇形选取（终点模式专用，沿路模式不读）
+# 以下参数在 follow_road=true 时不生效，但必须存在以通过 params_io 绑定表校验。
+subgoal_fan_half_deg: 90.0
+subgoal_fan_step_deg: 5.0
+subgoal_align_w: 3.0
+subgoal_free_w: 1.0
+subgoal_prev_w: 1.0
+subgoal_clearance: 0.3
+goal_clear_radius: 0.0
 plan_freq: 10.0
 
 # ── 沿路模式（无定位，路线 A：走廊即道路）──

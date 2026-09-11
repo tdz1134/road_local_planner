@@ -40,6 +40,14 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"curvature_baseline", kDouble, &p->curvature_baseline},
       {"goal_tolerance", kDouble, &p->goal_tolerance},
       {"goal_snap_dist", kDouble, &p->goal_snap_dist},
+      // 子目标扇形选取（终点模式专用）
+      {"subgoal_fan_half_deg", kDouble, &p->subgoal_fan_half_deg},
+      {"subgoal_fan_step_deg", kDouble, &p->subgoal_fan_step_deg},
+      {"subgoal_align_w", kDouble, &p->subgoal_align_w},
+      {"subgoal_free_w", kDouble, &p->subgoal_free_w},
+      {"subgoal_prev_w", kDouble, &p->subgoal_prev_w},
+      {"subgoal_clearance", kDouble, &p->subgoal_clearance},
+      {"goal_clear_radius", kDouble, &p->goal_clear_radius},
       {"plan_freq", kDouble, &p->plan_freq},
       // A* 搜索
       {"astar_max_iter", kInt, &p->astar_max_iter},
@@ -126,6 +134,34 @@ bool loadNavParams(const std::string& yaml_path, NavParams* out,
       }
     }
   }
+
+  if (!problems.empty()) {
+    if (err != nullptr) {
+      std::ostringstream oss;
+      for (size_t i = 0; i < problems.size(); ++i) {
+        if (i != 0) oss << "; ";
+        oss << problems[i];
+      }
+      *err = oss.str();
+    }
+    return false;
+  }
+
+  // 关系校验：消除“设了但不生效的旋钮”
+  if (out->subgoal_min_ratio > out->lookahead_ratio + 1e-9)
+    problems.push_back("subgoal_min_ratio must be <= lookahead_ratio");
+  if (out->footprint_clear_radius >= out->inflation_radius - 1e-9)
+    problems.push_back("footprint_clear_radius must be < inflation_radius");
+  if (out->goal_tolerance <= out->safety_margin + 1e-9)
+    problems.push_back("goal_tolerance must be > safety_margin (otherwise stop_horizon deadlock)");
+  if (out->subgoal_fan_half_deg > 0.0 && out->subgoal_fan_step_deg <= 0.0)
+    problems.push_back("subgoal_fan_step_deg must be > 0 when subgoal_fan_half_deg > 0");
+  if (out->subgoal_clearance < 0.0)
+    problems.push_back("subgoal_clearance must be >= 0");
+  if (out->goal_clear_radius < 0.0)
+    problems.push_back("goal_clear_radius must be >= 0");
+  if (out->subgoal_align_w <= out->subgoal_free_w + 1e-9)
+    problems.push_back("subgoal_align_w must be > subgoal_free_w");
 
   if (!problems.empty()) {
     if (err != nullptr) {

@@ -11,7 +11,7 @@
 //      搜索会跑出栅格边界。
 //
 // ── 依赖 ───────────────────────────────────────────────────────────
-//   仅 C++14 标准库。不含任何 ROS / 第三方库引用，可直接交叉编译到 MDC。
+//   仅 C++14 标准库，和yaml-cpp。不含任何 ROS / 第三方库引用，可直接交叉编译到 MDC。
 //   与 ROS 的对接由将来独立的节点壳完成，本头文件不得引入 ROS 类型。
 #include <cmath>
 #include <cstdint>
@@ -200,6 +200,17 @@ struct NavParams {
   // 用米而非格数：换栅格分辨率时物理含义不变，否则 res 从 0.05 改到 0.10
   // 吸附范围会悄悄翻倍。
   double goal_snap_dist = 0.5;
+
+  // ---- 子目标扇形选取（终点模式专用，沿路模式不读）----
+  // 中心方向（θ=goal_bearing）被障碍截断时展开扇形候选，打分选优。
+  // subgoal_fan_half_deg=0 → 关闭扇形，退回单射线（与 subgoal_clearance=0 一起可完全复现旧行为）。
+  double subgoal_fan_half_deg = 90.0;   // 扇形半角 deg；0=关闭扇形
+  double subgoal_fan_step_deg = 5.0;    // 扇形角步长 deg
+  double subgoal_align_w    = 3.0;      // 终点对齐权重 cos(θ-θ_goal)；必须 > subgoal_free_w
+  double subgoal_free_w     = 1.0;      // 饱和自由距离权重（饱和参考 = subgoalMin()）
+  double subgoal_prev_w     = 1.0;      // 上帧方向一致性权重；0=关闭滞后
+  double subgoal_clearance  = 0.3;      // 截断时子目标与膨胀带边缘的净空 m；0=复现旧行为
+  double goal_clear_radius  = 0.0;      // 终点清洞半径 m；0=关闭（终点贴墙场景才需要）
 
   // ---- 速度规划 ----
   double safety_margin = 0.12;  // 制动包络附加安全距离 m

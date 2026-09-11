@@ -50,6 +50,11 @@ class NavCore {
   // 沿路模式无 pose 可重投影，直接存/复用上一帧的 base 系路径（滞后约 v/freq，作为软吸引子足够）。
   std::vector<Point2D> last_path_base_;   // 上帧路径（base 系），仅 follow_road 时使用
   bool have_prev_path_ = false;
+
+  // 子目标方向滞后（防翻烧饼）：存上帧选中的子目标方位角，传给 subgoal::project 作为打分参考。
+  // 与 have_prev_path_ 同类：换终点时清零，不能沿用旧方向记忆。
+  double last_subgoal_bearing_ = 0.0;
+  bool   have_last_bearing_ = false;
 };
 
 }  // namespace unk

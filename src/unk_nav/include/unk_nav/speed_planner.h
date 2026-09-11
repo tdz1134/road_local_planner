@@ -1,13 +1,14 @@
 #pragma once
 // 速度规划：由路径与局部栅格反推本周期的推荐速度。
 //
-// 同时强制差速底盘的四条限制，取最小值：
+// 同时强制差速底盘的六条限制，取最小值：
 //   1. 车辆能力     v <= v_max
 //   2. 障碍制动包络 v^2/(2a) + v*T_reaction + margin <= d_obs
 //   3. 横向加速度   v <= sqrt(a_lat_max / kappa)
 //   4. 角速度上限   v <= w_max / kappa          （因 w = v * kappa）
 //   5. 曲率变化率   v <= dk_max / (dkappa/ds)
-// 只限曲率而不限后两条，差速底盘在高速段会侧滑失稳，故三条运动约束必须一起卡。
+//   6. 停车视距     v <= speedForDistance(stop_horizon - margin)
+// 只限曲率而不限后三条，差速底盘在高速段会侧滑失稳，故三条运动约束必须一起卡。
 //
 // 另外做可选的硬可行性判定：kappa_max > 0 时，路径曲率超过它就急停（该车根本走不出
 // 这条路径），而不是单纯降速 —— 降速解决不了几何不可行。差速底盘默认关闭此项
@@ -26,6 +27,7 @@ struct Result {
   double brake_dist = 0.0;         // 当前速度下的制动包络距离
   double kappa_max = 0.0;          // 路径最大曲率
   double dk_ds_max = 0.0;          // 路径最大曲率变化率（对弧长）
+  double stop_horizon = std::numeric_limits<double>::infinity();  // 停车视距 m（调试用）
   bool emergency_stop = true;
   const char* limit_by = "none";   // 起限制作用的分项，调试用
 };
@@ -37,8 +39,10 @@ double brakeDistance(double v, const NavParams& p);
 double speedForDistance(double d, const NavParams& p);
 
 // 综合限速。grid 必须是与生成 path 时同一份（已膨胀）栅格，否则障碍距离不一致。
+// stop_horizon: 停车视距 m（子目标被膨胀带截断 / 子目标即终点时，速度必须能在视距内停下）。
+//   默认 inf = 不生效，保证既有调用点不破。
 Result limit(const Path& path, const GridMap& grid, double current_speed,
-             const NavParams& p);
+             const NavParams& p, double stop_horizon = std::numeric_limits<double>::infinity());
 
 }  // namespace speed
 }  // namespace unk

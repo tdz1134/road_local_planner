@@ -30,7 +30,7 @@ double speedForDistance(double d, const NavParams& p) {
 }
 
 Result limit(const Path& path, const GridMap& grid, double current_speed,
-             const NavParams& p) {
+             const NavParams& p, double stop_horizon) {
   Result r;
   if (path.size() < 2) {
     r.emergency_stop = true;
@@ -95,7 +95,7 @@ Result limit(const Path& path, const GridMap& grid, double current_speed,
     return r;
   }
 
-  // ---- 4) 四条限速取最小 ----
+  // ---- 4) 五条限速取最小 ----
   double v = p.v_max;
   r.limit_by = "v_max";
 
@@ -126,6 +126,19 @@ Result limit(const Path& path, const GridMap& grid, double current_speed,
     if (v_dk < v) {
       v = v_dk;
       r.limit_by = "curvature_rate";
+    }
+  }
+
+  // ---- 5) 停车视距限速 ----
+  // 子目标被膨胀带截断 / 子目标即终点时，速度必须能在视距内停下。
+  // 不接入制动包络急停判定（避免边界振荡导致永久 estop）。
+  r.stop_horizon = stop_horizon;
+  if (!std::isinf(stop_horizon)) {
+    const double d_horizon = std::max(0.0, stop_horizon - p.safety_margin);
+    const double v_horizon = speedForDistance(d_horizon, p);
+    if (v_horizon < v) {
+      v = v_horizon;
+      r.limit_by = "subgoal_horizon";
     }
   }
 
