@@ -1,38 +1,34 @@
 <?xml version="1.0"?>
 <!--
-  road_follow.launch：无定位、基于栅格走廊的沿路行驶（路线 A）
-  一键启动：Gazebo(road_world 走廊) + Scout v2 + 栅格 + 导航(沿路模式) + RViz
+  obstacle_mid_road.launch：沿路模式（follow_road=true）：NavCore 从路缘走廊几何推车体系前瞻子目标，
+        不读定位与全局终点；障碍由下游 A* 负责绕行，绕不过就如实 RECOVERY/ABORT。
+  一键启动：Gazebo(obstacle_mid.world) + Scout v2 + 栅格 + 导航 + RViz
 
-  与 road_nav.launch（同一走廊的终点导航）的区别：
-    · 世界：road_world（两侧路缘夹出的走廊 + 路中圆柱 + 90° 弯）
-    · 导航配置：nav_params_road.yaml（follow_road=true）—— NavCore 从走廊几何直接推
-      车体系前瞻子目标，**完全不读定位/全局终点**
-    · 默认不启动 localization_node（体现"无定位"）：规划只用 base 系栅格；无 /odom 时
-      车速按 0 处理、前进位移棘轮退化为仅"规划连续失败"检测（走廊内规划恒成功，不影响跟路）。
-      要 body 系车速（本体感知）与 RViz 真值可视化，设 use_localization:=true。
-    · RViz 用 unk_nav.rviz（Fixed Frame=odom；沿路模式路径以 base_link 系发布，
-      需手动把 Fixed Frame 改为 base_link 才能正确显示）
+  世界由 scripts/gen_obstacle_world.py 生成：走廊内带静态障碍的闭合道路，
+  路宽 6.0m，出生点见下方 arg。障碍全 static，含若干「口宽刚好高于
+  膨胀封锁线 1.4m」的临界断面，以及（tight）一个完全封死断面。
+
+  RViz Fixed Frame 需为 base_link。
 
   用法：
-    roslaunch unk_nav_sim road_follow.launch
-    roslaunch unk_nav_sim road_follow.launch use_localization:=true   # 供车速 + odom 真值可视化
-    roslaunch unk_nav_sim road_follow.launch gui:=false               # 无头模式
+    roslaunch unk_nav_sim obstacle_mid_road.launch
+    roslaunch unk_nav_sim obstacle_mid_road.launch gui:=false    # 无头模式
 -->
 <launch>
 
   <arg name="gui" default="true"/>
   <arg name="use_localization" default="false"/>
 
-  <!-- 出生点：水平走廊西端，车头朝 +X（沿走廊向东）-->
-  <arg name="x"   default="-20.0"/>
-  <arg name="y"   default="0.0"/>
-  <arg name="yaw" default="0.0"/>
+  <!-- 出生点：第一段直道上，与 world 内中心线取样一致（不要手改） -->
+  <arg name="x"   default="2.000"/>
+  <arg name="y"   default="0.000"/>
+  <arg name="yaw" default="0.00000"/>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 1. Gazebo + road_world（走廊道路）                          -->
+  <!-- 1. Gazebo 世界                                              -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
-    <arg name="world_name"   value="$(find unk_nav_sim)/worlds/road_world.world"/>
+    <arg name="world_name"   value="$(find unk_nav_sim)/worlds/obstacle_mid.world"/>
     <arg name="paused"       value="false"/>
     <arg name="use_sim_time" value="true"/>
     <arg name="gui"          value="$(arg gui)"/>
@@ -51,8 +47,7 @@
   </include>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 3. 定位（可选）：仅供 body 系车速与 RViz 真值可视化；        -->
-  <!--    沿路规划不读 pose，关掉它才是"无定位"的完整体现          -->
+  <!-- 3. 定位（Gazebo 真值 → /odom + TF）                         -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="localization_node" pkg="unk_nav_sim" type="localization_node"
         output="screen" if="$(arg use_localization)">
@@ -60,22 +55,21 @@
   </node>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 4. 栅格节点（/velodyne_points → /local_grid，base_link 系）  -->
-  <!--    用静态 TF velodyne→base_link，不需要定位                 -->
+  <!-- 4. 栅格节点（/velodyne_points → /local_grid）               -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="grid_node" pkg="unk_nav_sim" type="grid_node" output="screen">
     <rosparam file="$(find unk_nav_sim)/config/grid_params.yaml" command="load"/>
   </node>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 5. 导航节点（沿路模式：nav_params_road.yaml，follow_road=true）-->
+  <!-- 5. 导航节点                                                 -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="nav_node" pkg="unk_nav_sim" type="nav_node" output="screen">
     <param name="config_file" value="$(find unk_nav)/config/nav_params_road.yaml"/>
   </node>
 
   <!-- ══════════════════════════════════════════════════════════ -->
-  <!-- 6. RViz（Fixed Frame=base_link，车在原点、走廊随车滚动）     -->
+  <!-- 6. RViz                                                     -->
   <!-- ══════════════════════════════════════════════════════════ -->
   <node name="rviz" pkg="rviz" type="rviz"
         args="-d $(find unk_nav_sim)/config/unk_nav.rviz"

@@ -167,15 +167,30 @@ def centerline_segments(segments, arc_ds):
 
 # ── 组装 world ────────────────────────────────────────────────────────
 
-def _ccw(px, py, qx, qy, rx, ry):
-    return (ry - py) * (qx - px) > (qy - py) * (rx - px)
+def _orient(px, py, qx, qy, rx, ry):
+    """cross(q-p, r-p) 的符号，按坐标量级归一后与 EPS 比：共线时给 0而不是随机符号。"""
+    cross = (qx - px) * (ry - py) - (qy - py) * (rx - px)
+    scale = abs(qx - px) * abs(ry - py) + abs(qy - py) * abs(rx - px)
+    rel = cross / scale if scale > 0 else 0.0
+    if abs(rel) < 1e-12:
+        return 0
+    return 1 if rel > 0 else -1
 
 
 def _seg_intersect(a, b, c, d):
-    return (_ccw(a[0], a[1], c[0], c[1], d[0], d[1]) !=
-            _ccw(b[0], b[1], c[0], c[1], d[0], d[1]) and
-            _ccw(a[0], a[1], b[0], b[1], c[0], c[1]) !=
-            _ccw(a[0], a[1], b[0], b[1], d[0], d[1]))
+    """
+    严格穿越判定（共享端点与相切都不算）。
+    中心线被离散成共 ds 的小段，同一腿上的相邻子段完全共线：不带 EPS 的方向
+    测试会在 1e-17 量级上随机翻转，把一条直道自己判成“自交 5 处”。
+    共线端点（T 形相接）也返回 False：那是退化身形，由腿间距检查接手。
+    """
+    x1 = _orient(*a, *b, *c)
+    x2 = _orient(*a, *b, *d)
+    y1 = _orient(*c, *d, *a)
+    y2 = _orient(*c, *d, *b)
+    if x1 == x2 == y1 == y2 == 0:
+        return False        # 四端点共线：同一腿的离散子段，不是交叉
+    return (x1 * x2 < 0) and (y1 * y2 < 0)
 
 
 def validate(pairs, end, width):

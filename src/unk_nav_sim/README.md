@@ -14,18 +14,25 @@ unk_nav 规划核心的 **Gazebo 仿真环境 + ROS 接口层**。
 
 ## 快速启动
 
+可直接复制的完整命令清单见仓库根目录 `快速启动.md`。
+
 ```bash
 source ~/projects/road_local_planner/devel/setup.bash
-roslaunch unk_nav_sim unk_nav_test.launch
+roslaunch unk_nav_sim open_goal.launch
 ```
 
 启动后在 RViz 里用 **2D Nav Goal** 工具点击目标点，Scout 开始自主导航避障。
 
 可选参数：
 ```bash
-roslaunch unk_nav_sim unk_nav_test.launch world:=walls   # 30×30m 墙壁世界
-roslaunch unk_nav_sim unk_nav_test.launch gui:=false     # 无头模式
+roslaunch unk_nav_sim open_goal.launch world:=walls   # 换 30×30m 墙壁世界（等价于 walls_goal.launch）
+roslaunch unk_nav_sim open_goal.launch gui:=false     # 无头模式
 ```
+
+入口按「世界_模式」命名：`road` = 沿路模式（`nav_params_road.yaml`，自动跟路、不需点目标），
+`goal` = 终点模式（`nav_params.yaml`，必须手动点 2D Nav Goal）。世界有 `open`（开阔地）、`walls`、
+`road`（直走廊，沿路版叫 `road_follow.launch`）、`loop`（6m 闭合环）、`loop_extreme`（3m + S 弯
++ 180° 发夹）、`obstacle_mid` / `obstacle_tight`（闭合环 + 路上静态障碍）。
 
 ### 沿路模式（无定位，走廊即道路）
 
@@ -38,8 +45,9 @@ roslaunch unk_nav_sim road_follow.launch
 - 世界 `road_world.world`：直走廊 + 两个路中圆柱 + 90° 弯。
 - 导航配置 `unk_nav/config/nav_params_road.yaml`（`follow_road=true`）：NavCore 从栅格
   走廊几何直接推车体系前瞻子目标，**完全不读定位/全局终点**。
-- **默认不启动 localization_node**（体现“无定位”）：规划只用 base 系栅格；RViz Fixed Frame
-  为 base_link（车在原点、走廊随车滚动），路径以 base_link 系发布。
+- **默认不启动 localization_node**（体现“无定位”）：规划只用 base 系栅格，路径以 base_link 系
+  发布。RViz 与终点模式共用一份 `unk_nav.rviz`（Fixed Frame=odom），沿路模式需**手动改成
+  base_link**才能正确看到路径。
 - 可选 `use_localization:=true`：提供 body 系车速（本体感知）与 odom 真值可视化；沿路规划仍不读 pose。
 
 ```bash
@@ -106,7 +114,7 @@ cmd.angular.z = tc.w;
 
 ## 话题一览
 
-启动 `unk_nav_test.launch` 后的完整话题列表：
+启动任一 launch 后的完整话题列表：
 
 ### 传感器 / 仿真
 
@@ -129,7 +137,7 @@ cmd.angular.z = tc.w;
 
 | 话题 | 类型 | 方向 | 说明 |
 |------|------|------|------|
-| `/local_grid` | nav_msgs/OccupancyGrid | grid_node 发布 | base_link 系局部栅格（408×408，0.05m/格） |
+| `/local_grid` | nav_msgs/OccupancyGrid | grid_node 发布 | base_link 系局部栅格（340×340，0.1m/格，窗口 34m） |
 
 ### 导航
 
@@ -139,6 +147,9 @@ cmd.angular.z = tc.w;
 | `/cmd_vel` | geometry_msgs/Twist | nav_node → Scout | 速度指令（linear.x + angular.z） |
 | `/unk_nav/path` | nav_msgs/Path | nav_node 发布 | 当前规划路径（目标模式 odom 系，沿路模式 base_link 系） |
 | `/unk_nav/state` | std_msgs/String | nav_node 发布 | 导航状态（GO/IDLE/ARRIVED/ABORT + 原因） |
+| `/unk_nav/work_grid` | nav_msgs/OccupancyGrid | nav_node 发布 | 调试：膨胀后 A* 实际搜索的栅格（规划器眼中的世界） |
+| `/unk_nav/fan_candidates` | visualization_msgs/Marker | nav_node 发布 | 调试：子目标扇形展开的候选 |
+| `/unk_nav/goal_marker` | visualization_msgs/Marker | nav_node 发布 | 调试：当前车体系子目标（绿色圆柱） |
 
 ### 电机控制（底层）
 
@@ -246,19 +257,25 @@ unk_nav_sim/
 │   └── nav_node.cpp            ← ROS 接口壳（调用 unk_nav 库）
 ├── config/
 │   ├── grid_params.yaml        ← 栅格参数（仿真层）
-│   ├── unk_nav.rviz            ← RViz 配置（终点导航，Fixed Frame=odom）
-│   └── road_follow.rviz        ← RViz 配置（沿路模式，Fixed Frame=base_link）
+│   └── unk_nav.rviz            ← RViz 配置（所有 launch 共用；沿路模式需手动把 Fixed Frame 改成 base_link）
 │   （导航参数在算法层 ../unk_nav/config/：nav_params.yaml 终点、nav_params_road.yaml 沿路）
-├── launch/
-│   ├── unk_nav_test.launch     ← 终点导航全链路一键启动
-│   ├── road_follow.launch      ← 沿路模式（无定位）一键启动
-│   ├── large_world.launch      ← 只启动 200×200m 世界
-│   └── walls_world.launch      ← 只启动 30×30m 墙壁世界
+├── launch/                     ← 命名规则见上文「快速启动」
+│   ├── open_goal.launch        ← 开阔地，world:=walls 可切墙壁世界
+│   ├── walls_goal.launch       ← 30×30m 墙壁世界
+│   ├── road_follow.launch      ← 沿路模式（无定位）
+│   ├── road_nav.launch         ← 同一走廊的终点模式
+│   ├── loop_{road,goal}.launch           ← 6m 闭合环，无障碍
+│   ├── loop_extreme_{road,goal}.launch   ← 3m 环 + S 弯 + 发夹
+│   └── obstacle_{mid,tight}_{road,goal}.launch  ← 闭合环 + 路上静态障碍
 ├── worlds/
-│   ├── large_world.world       ← 200×200m，20个障碍
+│   ├── large_world.world       ← 200×200m，24 个障碍（柱/块/L 形/墙）
 │   ├── walls_world.world       ← 30×30m，纯墙壁
-│   ├── road_world.world        ← 走廊道路（沿路模式：直路+路中圆柱+90°弯）
-│   └── unk_world.world         ← 30×30m，混合障碍
+│   ├── road_world.world        ← 走廊道路（直路+路中两圆柱+90°弯）
+│   ├── unk_world.world         ← 30×30m，混合障碍（无对应 launch，留作手工测试）
+│   ├── loop_road.world         ← 6m 闭合环，纯道路      ┐ scripts/gen_road_world.py
+│   ├── loop_extreme.world      ← 3m 极端闭合环          ┘
+│   ├── obstacle_mid.world      ← 6m 环 + 19 个可绕障碍   ┐ scripts/gen_obstacle_world.py
+│   └── obstacle_tight.world    ← 3.6m 环 + 含一个全封死断面 ┘
 ├── gazebo笔记.md               ← Gazebo 世界搭建教程
 ├── CMakeLists.txt
 └── package.xml

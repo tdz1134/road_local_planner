@@ -253,15 +253,18 @@ Gazebo 的世界文件用 **SDF**（Simulation Description Format）格式，后
       args="-d $(find unk_nav_sim)/config/unk_nav.rviz"/>
 ```
 
-**启动命令**：
+**启动命令**（上面这份 `unk_nav.launch` 已拆成按「世界_模式」命名的多个文件）：
 ```bash
 source ~/projects/road_local_planner/devel/setup.bash
-roslaunch unk_nav_sim unk_nav.launch
+roslaunch unk_nav_sim open_goal.launch     # 全链路：Gazebo + Scout + 定位 + 栅格 + 导航 + RViz
+roslaunch unk_nav_sim open_goal.launch x:=-10 y:=-10 yaw:=1.57   # 改变出生位置
+roslaunch unk_nav_sim open_goal.launch world:=walls              # 换墙壁世界
 ```
 
-**改变出生位置**：
+只要 Gazebo 世界、不起车与导航（改地图、放障碍时用）：
 ```bash
-roslaunch unk_nav_sim unk_nav.launch x:=-10 y:=-10 yaw:=1.57
+roslaunch gazebo_ros empty_world.launch \
+  world_name:=$(rospack find unk_nav_sim)/worlds/unk_world.world
 ```
 
 ---
@@ -389,7 +392,7 @@ unk_nav 的所有规划距离按 `sensor_range` 无量纲化：
 
 ### 用 Gazebo GUI 可视化编辑
 
-1. 启动 Gazebo：`roslaunch unk_nav_sim unk_nav.launch`
+1. 启动 Gazebo：`roslaunch gazebo_ros empty_world.launch world_name:=$(rospack find unk_nav_sim)/worlds/unk_world.world`
 2. `Insert` 标签页 → 选 Box/Cylinder → 点击地面放置
 3. 选 `Translate`（移动）/ `Rotate`（旋转）工具调整位置
 4. `File → Save World As...` 保存为新的 `.world` 文件

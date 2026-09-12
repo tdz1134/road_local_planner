@@ -1,33 +1,77 @@
-# catkin build artifacts
+# 注意：gitignore 的 # 只有位于行首才是注释，行尾 # 会被当作模式的一部分，
+# 导致整条规则静默失效。所以本文件一律「注释单独占一行」。
+
+# ── catkin / colcon 构建产物 ─────────────────────────────
+# 重编即可复现，且含生成的消息头与 cmake 缓存，体积远超文本价值
 build/
 devel/
 install/
+log/
 logs/
-
-# unk_nav 独立构建目录（验证零第三方依赖用，不进版本库）
-build_standalone/
-
-# catkin generated
 .catkin_workspace
+.catkin_tools/
+
+# catkin 在 src/ 下生成的 CMakeLists.txt 符号链接
 src/CMakeLists.txt
 
-# IDE
+# unk_nav 独立构建目录（验证零第三方依赖用）
+build_standalone/
+
+# CTest 运行产物：LastTest.log / CTestCostData.txt 每次跑测试都变，纯噪音
+Testing/
+
+# clangd / IDE 索引缓存
+.cache/
+.clangd/
+compile_commands.json
+
+# ── AI / 编辑器辅助目录 ─────────────────────────────────
+# .qoder 下只保留 skills/：那是项目规范文档（road-local-planner/SKILL.md），
+# 需要跟代码一起演进；其余是会话临时产物（计划 md、缓存）。
+# 必须先 .qoder/* 再 !.qoder/skills/：写成 .qoder/ 会把父目录整个排除，
+# 之后 ! 规则失效，skills/ 再也放不回来。
+.qoder/*
+!.qoder/skills/
+
+# 设备指纹（含机器标识），不该入库
+.marscode/
+
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
+# emacs 锁文件与 auto-save
+.#*
+\#*\#
 
-# compile_commands (too large for GitHub)
-compile_commands.json
+# merge / patch 残留：留着会被 git add . 顺手带走
+*.orig
+*.rej
 
-# Python
-__pycache__/
-*.pyc
-
-# demo / 运行产物
+# ── 运行产物 ────────────────────────────────────────────
+# demo / 仿真输出的轨迹 dump
 trajectory.csv
+
+# rosbag 录制
+*.bag
+
+# 段错误 core dump（gdb 生成的无扩展名 core 也要覆盖）
+core
+core.*
+
+# ── Python（scripts/ 下的 world 生成器）─────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── OS ──────────────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
