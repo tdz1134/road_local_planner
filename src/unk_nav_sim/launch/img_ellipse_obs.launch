@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<!--
+  img_ellipse_obs.launch：椭圆 loop + 障碍（follow_road=true）
+
+  世界：img_ellipse_obs.world —— 椭圆 loop + 4 个障碍
+        由 scripts/gen_road_from_image.py 从图片生成（红色标记障碍）。
+
+  一键启动：Gazebo + Scout v2 + 栅格 + 导航(沿路模式) + RViz
+
+  用法：
+    roslaunch unk_nav_sim img_ellipse_obs.launch
+    roslaunch unk_nav_sim img_ellipse_obs.launch gui:=false
+-->
+<launch>
+
+  <arg name="gui" default="true"/>
+  <arg name="use_localization" default="false"/>
+  <arg name="x"   default="20.0"/>
+  <arg name="y"   default="14.0"/>
+  <arg name="yaw" default="3.14"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name"   value="$(find unk_nav_sim)/worlds/img_ellipse_obs.world"/>
+    <arg name="paused"       value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui"          value="$(arg gui)"/>
+    <arg name="headless"     value="false"/>
+    <arg name="debug"        value="false"/>
+  </include>
+
+  <include file="$(find scout_gazebo_sim)/launch/spawn_scout_v2.launch">
+    <arg name="x"   value="$(arg x)"/>
+    <arg name="y"   value="$(arg y)"/>
+    <arg name="z"   value="0.0"/>
+    <arg name="yaw" value="$(arg yaw)"/>
+  </include>
+
+  <node name="localization_node" pkg="unk_nav_sim" type="localization_node"
+        output="screen" if="$(arg use_localization)">
+    <param name="model_name" value="scout/"/>
+  </node>
+
+  <node name="grid_node" pkg="unk_nav_sim" type="grid_node" output="screen">
+    <rosparam file="$(find unk_nav_sim)/config/grid_params.yaml" command="load"/>
+  </node>
+
+  <node name="nav_node" pkg="unk_nav_sim" type="nav_node" output="screen">
+    <param name="config_file" value="$(find unk_nav)/config/nav_params_road.yaml"/>
+  </node>
+
+  <node name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find unk_nav_sim)/config/unk_nav.rviz"
+        required="false"/>
+
+</launch>

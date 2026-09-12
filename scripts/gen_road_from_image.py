@@ -3,17 +3,26 @@
 """
 gen_road_from_image.py —— 从图片生成闭合 loop 道路世界。
 
-图片规范 v1.0：
+图片规范 v1.1：
   · 格式：PNG 或 JPG
-  · 颜色：黑色 (0,0,0) = 道路，白色 (255,255,255) = 背景
+  · 道路图：黑色 (0,0,0) = 道路，白色 (255,255,255) = 背景
+  · 障碍图（可选，--obstacles）：黑色 = 障碍，白色 = 背景
+  · 或在道路图中用红色 (R>150, G<100, B<100) 标记障碍
   · 分辨率：10 pixel/m（固定比例）
   · 坐标系：图片左上角 = 世界原点 (0,0)，y 轴向下
-  · 道路：黑色区域形成闭合环（内外两圈轮廓）
 
 用法：
+    # 路缘模式（默认）
     python3 scripts/gen_road_from_image.py road.png
-    python3 scripts/gen_road_from_image.py road.png -o output.world
-    python3 scripts/gen_road_from_image.py road.png --curb-height 0.5  # 矮路缘
+
+    # 无障碍、只有墙壁边界
+    python3 scripts/gen_road_from_image.py road.png --no-curb
+
+    # 带障碍（单独障碍图）
+    python3 scripts/gen_road_from_image.py road.png --no-curb --obstacles obstacles.png
+
+    # 带障碍（道路图中红色标记）
+    python3 scripts/gen_road_from_image.py road_with_red.png --no-curb
 """
 
 import argparse
@@ -25,214 +34,340 @@ try:
     import cv2
     import numpy as np
 except ImportError:
-    print("错误：需要 OpenCV 和 NumPy。安装：pip3 install opencv-python numpy", file=sys.stderr)
+    print("错误：需要 OpenCV 和 NumPy。安装：pip3 install opencv-python numpy",
+          file=sys.stderr)
     sys.exit(1)
 
 
-# ══════════════════ 与 gen_road_world.py 保持同步 ══════════════════
+# ══════════════════ 常量 ══════════════════
 PIXEL_PER_M = 10.0       # 图片分辨率：10 pixel/m
-CURB_WIDTH = 0.3         # 路缘宽 m
-CURB_HEIGHT = 1.5        # 路缘高 m
-CURB_SEGMENT_LEN = 0.6   # 路缘段长 m（沿轮廓方向）
-CURB_SPACING = 0.4       # 路缘段间距 m（中心到中心）
-# ═══════════════════════════════════════════════════════════════════
+
+# 路缘模式默认参数
+CURB_WIDTH = 0.3          # 路缘宽 m
+CURB_HEIGHT = 1.5         # 路缘高 m
+CURB_SEGMENT_LEN = 0.6    # 路缘段长 m
+CURB_SPACING = 0.4        # 路缘段间距 m
+
+# 墙壁模式默认参数
+WALL_WIDTH = 0.15         # 墙壁厚 m
+WALL_HEIGHT = 1.0         # 墙壁高 m
+
+# 障碍默认参数
+OBS_HEIGHT = 1.5          # 障碍高 m
+
+# 形态学核大小（像素）—— 消除像素级锯齿
+MORPH_KERNEL_PX = 5
+
+# 高斯平滑标准差（像素）—— 轮廓顶点平滑
+GAUSS_SIGMA_PX = 3.0
 
 
-def load_image(path):
-    """读取图片并二值化（黑色 = 道路 = 0，白色 = 背景 = 255）"""
+# ══════════════════ 图片处理 ══════════════════
+
+def load_binary(path):
+    """读取图片 → 二值化（黑=道路=0，白=背景=255），含形态学闭运算平滑"""
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError(f"无法读取图片：{path}")
-    # 二值化：黑色 (< 128) = 道路 = 0，白色 (>= 128) = 背景 = 255
     _, binary = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
+    # 形态学闭运算：填细小缺口、平滑边界锯齿
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                  (MORPH_KERNEL_PX, MORPH_KERNEL_PX))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k)
     return binary
 
 
+def load_color(path):
+    """读取彩色图片"""
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise FileNotFoundError(f"无法读取图片：{path}")
+    return img
+
+
+# ══════════════════ 轮廓处理 ══════════════════
+
 def extract_contours(binary):
-    """提取轮廓，返回轮廓列表（每个轮廓是 Nx1x2 的 ndarray）"""
-    # findContours 需要白色前景（255）= 对象，黑色 (0) = 背景
-    # 我们的 binary 里黑色 = 道路，所以需要反转
+    """提取轮廓（白色前景=对象）"""
     inverted = cv2.bitwise_not(binary)
-    contours, hierarchy = cv2.findContours(inverted, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-    return contours, hierarchy
+    return cv2.findContours(inverted, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 
 
-def simplify_contour(contour, tolerance=0.2):
-    """Ramer–Douglas–Peucker 简化轮廓，tolerance 单位是米，返回像素坐标"""
-    epsilon_px = tolerance * PIXEL_PER_M
-    simplified = cv2.approxPolyDP(contour, epsilon_px, closed=True)
-    return simplified.reshape(-1, 2)  # 返回像素坐标
+def smooth_contour(contour_px, sigma_px=GAUSS_SIGMA_PX):
+    """高斯平滑闭合轮廓点（消除像素阶梯）"""
+    pts = contour_px.reshape(-1, 2).astype(np.float64)
+    n = len(pts)
+    if n < 5:
+        return pts
+    ksize = max(3, int(sigma_px * 6) | 1)  # 确保奇数
+    kernel = cv2.getGaussianKernel(ksize, sigma_px)
+    # 对 x, y 分别做环形卷积（处理闭合轮廓的首尾衔接）
+    out = np.empty_like(pts)
+    for dim in range(2):
+        col = pts[:, dim].reshape(-1, 1)
+        # 首尾各延拓 ksize//2 个点（环形）
+        half = ksize // 2
+        ext = np.concatenate([col[-half:], col, col[:half]])
+        filtered = cv2.filter2D(ext, -1, kernel).flatten()
+        out[:, dim] = filtered[half:half + n]
+    return out
 
 
-def pixel_to_world(pt, image_height):
-    """像素坐标 → 世界坐标（翻转 y 轴）"""
-    return np.array([pt[0] / PIXEL_PER_M, (image_height - pt[1]) / PIXEL_PER_M])
+def simplify_contour(contour_px, tolerance_m=0.3):
+    """Ramer–Douglas–Peucker 简化。tolerance_m 单位米，输入/输出像素坐标"""
+    eps_px = tolerance_m * PIXEL_PER_M
+    result = cv2.approxPolyDP(contour_px.reshape(-1, 1, 2).astype(np.float32),
+                              eps_px, closed=True)
+    return result.reshape(-1, 2)
 
 
-def contour_to_world(contour_px, image_height):
-    """轮廓点（像素）→ 世界坐标（米）"""
-    world = np.array([[pt[0] / PIXEL_PER_M, (image_height - pt[1]) / PIXEL_PER_M]
-                      for pt in contour_px])
-    return world
+def contour_to_world(contour_px, img_h):
+    """像素 → 世界坐标（翻转 y）"""
+    return np.array([[p[0] / PIXEL_PER_M, (img_h - p[1]) / PIXEL_PER_M]
+                     for p in contour_px])
 
 
-def generate_curb_boxes(contour_world, curb_width, curb_height, segment_len, spacing):
-    """沿轮廓生成路缘 box，返回 box 列表 [(cx, cy, yaw, length, width, height), ...]"""
+# ══════════════════ 路缘 box ══════════════════
+
+def gen_curb_boxes(wall_pts, width, height, seg_len, spacing):
+    """沿轮廓生成路缘 box：[(cx, cy, yaw, L, W, H), ...]"""
     boxes = []
-    n = len(contour_world)
+    n = len(wall_pts)
     if n < 2:
         return boxes
-
-    # 计算每段长度和累计弧长
-    seg_lengths = []
-    cum_lengths = [0.0]  # cum_lengths[i] = 前 i 段的累计长度
-    for i in range(n):
-        p1 = contour_world[i]
-        p2 = contour_world[(i + 1) % n]
-        L = np.linalg.norm(p2 - p1)
-        seg_lengths.append(L)
-        cum_lengths.append(cum_lengths[-1] + L)
-    total_len = cum_lengths[-1]
-
-    # 沿轮廓按 spacing 均匀采样（双指针法）
-    s = 0.0
-    seg_idx = 0
-    while s < total_len:
-        # 找到 s 所在的段（cum_lengths[seg_idx] <= s < cum_lengths[seg_idx+1]）
-        while seg_idx < n and cum_lengths[seg_idx + 1] <= s:
-            seg_idx += 1
-        if seg_idx >= n:
+    seg_L = np.array([np.linalg.norm(wall_pts[(i+1) % n] - wall_pts[i])
+                      for i in range(n)])
+    cum = np.concatenate([[0.0], np.cumsum(seg_L)])
+    total = cum[-1]
+    s, idx = 0.0, 0
+    while s < total:
+        while idx < n and cum[idx + 1] <= s:
+            idx += 1
+        if idx >= n:
             break
-
-        p1 = contour_world[seg_idx]
-        p2 = contour_world[(seg_idx + 1) % n]
-        seg_len = seg_lengths[seg_idx]
-        if seg_len < 1e-6:
+        L = seg_L[idx]
+        if L < 1e-6:
             s += spacing
             continue
-
-        # 在段内插值
-        t = (s - cum_lengths[seg_idx]) / seg_len
+        t = (s - cum[idx]) / L
+        p1, p2 = wall_pts[idx], wall_pts[(idx + 1) % n]
         cx = p1[0] + t * (p2[0] - p1[0])
         cy = p1[1] + t * (p2[1] - p1[1])
         yaw = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
-
-        boxes.append((cx, cy, yaw, segment_len, curb_width, curb_height))
+        boxes.append((cx, cy, yaw, seg_len, width, height))
         s += spacing
-
     return boxes
 
 
-def write_sdf_world(boxes_left, boxes_right, output_path, world_name="road_from_image"):
-    """输出 SDF world 文件"""
+# ══════════════════ 障碍提取 ══════════════════
+
+def extract_obstacles_from_red(img_color, img_h, min_area_m2=0.5,
+                               obs_height=OBS_HEIGHT):
+    """从彩色图中提取红色像素作为障碍 → 包围盒列表"""
+    hsv = cv2.cvtColor(img_color, cv2.COLOR_BGR2HSV)
+    # 红色在 HSV 色相环上有两段
+    mask1 = cv2.inRange(hsv, (0, 80, 80), (10, 255, 255))
+    mask2 = cv2.inRange(hsv, (170, 80, 80), (180, 255, 255))
+    mask = cv2.bitwise_or(mask1, mask2)
+    return _contours_to_obs_boxes(mask, img_h, min_area_m2, obs_height)
+
+
+def extract_obstacles_from_image(path, img_h, min_area_m2=0.5,
+                                 obs_height=OBS_HEIGHT):
+    """从单独图片提取障碍（黑色=障碍，白色=背景）"""
+    gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        raise FileNotFoundError(f"无法读取障碍图片：{path}")
+    _, binary = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
+    # 反转：黑色障碍 → 白色前景（findContours 需要）
+    inverted = cv2.bitwise_not(binary)
+    return _contours_to_obs_boxes(inverted, img_h, min_area_m2, obs_height)
+
+
+def _contours_to_obs_boxes(mask, img_h, min_area_m2, obs_height):
+    """从二值 mask（白色=障碍）提取轮廓 → 用最小包围圆或旋转矩形近似"""
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    boxes = []
+    min_area_px = min_area_m2 * PIXEL_PER_M ** 2
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < min_area_px:
+            continue
+        rect = cv2.minAreaRect(c)
+        (rcx, rcy), (rw, rh), angle = rect
+        # 长短边比
+        long_side = max(rw, rh)
+        short_side = min(rw, rh)
+        aspect = short_side / long_side if long_side > 0 else 1.0
+        if aspect > 0.85:
+            # 近圆形 → 用短边做正方形 box（等效于包围圆）
+            wx = rcx / PIXEL_PER_M
+            wy = (img_h - rcy) / PIXEL_PER_M
+            d = long_side / PIXEL_PER_M
+            boxes.append((wx, wy, 0.0, d, d, obs_height))
+        else:
+            #  elongated → 旋转矩形
+            wx = rcx / PIXEL_PER_M
+            wy = (img_h - rcy) / PIXEL_PER_M
+            ww = rw / PIXEL_PER_M
+            wh = rh / PIXEL_PER_M
+            yaw = math.radians(angle)
+            boxes.append((wx, wy, yaw, ww, wh, obs_height))
+    return boxes
+
+
+# ══════════════════ SDF 输出 ══════════════════
+
+def _box_sdf(name, cx, cy, cz, yaw, sx, sy, sz,
+             ambient="0.6 0.6 0.6 1", diffuse="0.6 0.6 0.6 1"):
+    """生成单个 box model 的 SDF 字符串"""
+    return (
+        f'    <model name="{name}">\n'
+        f'      <static>true</static>\n'
+        f'      <pose>{cx:.3f} {cy:.3f} {cz:.3f} 0 0 {yaw:.3f}</pose>\n'
+        f'      <link name="link">\n'
+        f'        <collision name="col">\n'
+        f'          <geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>\n'
+        f'        </collision>\n'
+        f'        <visual name="vis">\n'
+        f'          <geometry><box><size>{sx:.3f} {sy:.3f} {sz:.3f}</size></box></geometry>\n'
+        f'          <material>\n'
+        f'            <ambient>{ambient}</ambient>\n'
+        f'            <diffuse>{diffuse}</diffuse>\n'
+        f'          </material>\n'
+        f'        </visual>\n'
+        f'      </link>\n'
+        f'    </model>\n'
+    )
+
+
+def write_world(boxes, output_path, world_name):
+    """写 SDF world。boxes = [(name, cx, cy, yaw, L, W, H), ...]"""
     with open(output_path, 'w') as f:
         f.write('<?xml version="1.0" ?>\n')
         f.write('<sdf version="1.5">\n')
-        f.write('  <world name="%s">\n' % world_name)
+        f.write(f'  <world name="{world_name}">\n')
         f.write('    <include><uri>model://sun</uri></include>\n')
         f.write('    <include><uri>model://ground_plane</uri></include>\n')
-
-        model_id = 0
-        for cx, cy, yaw, length, width, height in boxes_left:
-            f.write(f'    <model name="curbL_{model_id}">\n')
-            f.write(f'      <static>true</static>\n')
-            f.write(f'      <pose>{cx:.3f} {cy:.3f} {height/2:.3f} 0 0 {yaw:.3f}</pose>\n')
-            f.write(f'      <link name="link">\n')
-            f.write(f'        <collision name="collision">\n')
-            f.write(f'          <geometry><box><size>{length:.3f} {width:.3f} {height:.3f}</size></box></geometry>\n')
-            f.write(f'        </collision>\n')
-            f.write(f'        <visual name="visual">\n')
-            f.write(f'          <geometry><box><size>{length:.3f} {width:.3f} {height:.3f}</size></box></geometry>\n')
-            f.write(f'          <material>\n')
-            f.write(f'            <ambient>0.6 0.6 0.6 1</ambient>\n')
-            f.write(f'            <diffuse>0.6 0.6 0.6 1</diffuse>\n')
-            f.write(f'          </material>\n')
-            f.write(f'        </visual>\n')
-            f.write(f'      </link>\n')
-            f.write(f'    </model>\n')
-            model_id += 1
-
-        model_id = 0
-        for cx, cy, yaw, length, width, height in boxes_right:
-            f.write(f'    <model name="curbR_{model_id}">\n')
-            f.write(f'      <static>true</static>\n')
-            f.write(f'      <pose>{cx:.3f} {cy:.3f} {height/2:.3f} 0 0 {yaw:.3f}</pose>\n')
-            f.write(f'      <link name="link">\n')
-            f.write(f'        <collision name="collision">\n')
-            f.write(f'          <geometry><box><size>{length:.3f} {width:.3f} {height:.3f}</size></box></geometry>\n')
-            f.write(f'        </collision>\n')
-            f.write(f'        <visual name="visual">\n')
-            f.write(f'          <geometry><box><size>{length:.3f} {width:.3f} {height:.3f}</size></box></geometry>\n')
-            f.write(f'          <material>\n')
-            f.write(f'            <ambient>0.6 0.6 0.6 1</ambient>\n')
-            f.write(f'            <diffuse>0.6 0.6 0.6 1</diffuse>\n')
-            f.write(f'          </material>\n')
-            f.write(f'        </visual>\n')
-            f.write(f'      </link>\n')
-            f.write(f'    </model>\n')
-            model_id += 1
-
+        for name, cx, cy, yaw, L, W, H in boxes:
+            cz = H / 2.0
+            if name.startswith("obs_"):
+                amb = "0.8 0.3 0.0 1"
+                dif = "0.8 0.3 0.0 1"
+            else:
+                amb = "0.6 0.6 0.6 1"
+                dif = "0.6 0.6 0.6 1"
+            f.write(_box_sdf(name, cx, cy, cz, yaw, L, W, H, amb, dif))
         f.write('  </world>\n')
         f.write('</sdf>\n')
 
 
+# ══════════════════ 主流程 ══════════════════
+
 def main():
-    parser = argparse.ArgumentParser(description="从图片生成闭合 loop 道路世界")
-    parser.add_argument("image", help="输入图片路径（PNG/JPG）")
-    parser.add_argument("-o", "--output", help="输出 world 路径（默认：图片名.world）")
-    parser.add_argument("--curb-height", type=float, default=CURB_HEIGHT, help=f"路缘高度 m（默认 {CURB_HEIGHT}）")
-    parser.add_argument("--simplify-tolerance", type=float, default=0.2, help=f"轮廓简化容差 m（默认 0.2）")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(
+        description="从图片生成闭合 loop 道路世界（v1.1 改善平滑 + 障碍支持）")
+    ap.add_argument("image", help="道路图片（黑=路，白=背景；红=障碍可选）")
+    ap.add_argument("-o", "--output", help="输出 world 路径")
+    ap.add_argument("--no-curb", action="store_true",
+                    help="不生成路缘，改用薄墙标记边界")
+    ap.add_argument("--obstacles",
+                    help="障碍图片（黑=障碍，白=背景）；不指定则检测道路图中的红色")
+    ap.add_argument("--simplify-tolerance", type=float, default=0.3,
+                    help="轮廓简化容差 m（默认 0.3，越大越平滑）")
+    ap.add_argument("--smooth-sigma", type=float, default=GAUSS_SIGMA_PX,
+                    help=f"高斯平滑 σ 像素（默认 {GAUSS_SIGMA_PX}）")
+    ap.add_argument("--wall-height", type=float, default=WALL_HEIGHT)
+    ap.add_argument("--wall-width", type=float, default=WALL_WIDTH)
+    ap.add_argument("--curb-height", type=float, default=CURB_HEIGHT)
+    ap.add_argument("--obs-height", type=float, default=OBS_HEIGHT)
+    ap.add_argument("--obs-min-area", type=float, default=0.5,
+                    help="最小障碍面积 m²（过滤噪点，默认 0.5）")
+    args = ap.parse_args()
 
     if not os.path.exists(args.image):
         print(f"错误：图片不存在：{args.image}", file=sys.stderr)
         sys.exit(1)
 
     output = args.output or os.path.splitext(args.image)[0] + ".world"
+    world_name = os.path.splitext(os.path.basename(output))[0]
 
+    # ── 1. 读图 ──
     print(f"读取图片：{args.image}")
-    binary = load_image(args.image)
-    h, w = binary.shape
-    print(f"  尺寸：{w}×{h} pixel → {w/PIXEL_PER_M:.1f}×{h/PIXEL_PER_M:.1f} m")
+    binary = load_binary(args.image)
+    img_h, img_w = binary.shape
+    print(f"  {img_w}×{img_h} px → {img_w/PIXEL_PER_M:.1f}×{img_h/PIXEL_PER_M:.1f} m")
 
+    # ── 2. 提取轮廓 ──
     print("提取轮廓...")
     contours, hierarchy = extract_contours(binary)
     print(f"  找到 {len(contours)} 个轮廓")
-
     if len(contours) < 2:
-        print("错误：需要至少 2 个轮廓（外圈和内圈）才能形成 loop 道路", file=sys.stderr)
+        print("错误：需要至少 2 个轮廓形成 loop 道路", file=sys.stderr)
         sys.exit(1)
 
-    # 按面积排序，取最大的两个（外圈和内圈）
-    contours_sorted = sorted(contours, key=cv2.contourArea, reverse=True)
-    outer_px = contours_sorted[0]
-    inner_px = contours_sorted[1]
+    by_area = sorted(contours, key=cv2.contourArea, reverse=True)
+    outer_px, inner_px = by_area[0], by_area[1]
+    print(f"  外圈 {len(outer_px)} px，内圈 {len(inner_px)} px")
 
-    print(f"  外圈：{len(outer_px)} 点，面积 {cv2.contourArea(outer_px)/PIXEL_PER_M**2:.1f} m²")
-    print(f"  内圈：{len(inner_px)} 点，面积 {cv2.contourArea(inner_px)/PIXEL_PER_M**2:.1f} m²")
+    # ── 3. 平滑 + 简化 ──
+    print(f"平滑 σ={args.smooth_sigma:.1f}px，简化容差={args.simplify_tolerance}m")
+    outer_smooth = smooth_contour(outer_px, args.smooth_sigma)
+    inner_smooth = smooth_contour(inner_px, args.smooth_sigma)
+    outer_s = simplify_contour(outer_smooth, args.simplify_tolerance)
+    inner_s = simplify_contour(inner_smooth, args.simplify_tolerance)
+    print(f"  外圈 {len(outer_s)} 点，内圈 {len(inner_s)} 点")
 
-    print("简化轮廓...")
-    # 用很小的容差（0.05m）简化，保留大部分细节
-    outer_simplified = simplify_contour(outer_px, min(args.simplify_tolerance, 0.05))
-    inner_simplified = simplify_contour(inner_px, min(args.simplify_tolerance, 0.05))
-    print(f"  外圈：{len(outer_simplified)} 点")
-    print(f"  内圈：{len(inner_simplified)} 点")
+    outer_w = contour_to_world(outer_s, img_h)
+    inner_w = contour_to_world(inner_s, img_h)
 
-    print("转换坐标...")
-    outer_world = contour_to_world(outer_simplified, h)
-    inner_world = contour_to_world(inner_simplified, h)
+    # ── 4. 生成边界 ──
+    all_boxes = []  # [(name, cx, cy, yaw, L, W, H)]
 
-    print("生成路缘 box...")
-    boxes_left = generate_curb_boxes(outer_world, CURB_WIDTH, args.curb_height,
-                                      CURB_SEGMENT_LEN, CURB_SPACING)
-    boxes_right = generate_curb_boxes(inner_world, CURB_WIDTH, args.curb_height,
-                                       CURB_SEGMENT_LEN, CURB_SPACING)
-    print(f"  左路缘：{len(boxes_left)} 个 box")
-    print(f"  右路缘：{len(boxes_right)} 个 box")
+    if args.no_curb:
+        # 墙壁模式：沿轮廓每 0.5m 放一个薄 box
+        wall_boxes_l = gen_curb_boxes(outer_w, args.wall_width,
+                                      args.wall_height, 0.6, 0.4)
+        wall_boxes_r = gen_curb_boxes(inner_w, args.wall_width,
+                                      args.wall_height, 0.6, 0.4)
+        for i, b in enumerate(wall_boxes_l):
+            all_boxes.append((f"wallL_{i}", *b))
+        for i, b in enumerate(wall_boxes_r):
+            all_boxes.append((f"wallR_{i}", *b))
+        print(f"  墙壁：外 {len(wall_boxes_l)} + 内 {len(wall_boxes_r)}")
+    else:
+        # 路缘模式
+        curb_l = gen_curb_boxes(outer_w, CURB_WIDTH, args.curb_height,
+                                CURB_SEGMENT_LEN, CURB_SPACING)
+        curb_r = gen_curb_boxes(inner_w, CURB_WIDTH, args.curb_height,
+                                CURB_SEGMENT_LEN, CURB_SPACING)
+        for i, b in enumerate(curb_l):
+            all_boxes.append((f"curbL_{i}", *b))
+        for i, b in enumerate(curb_r):
+            all_boxes.append((f"curbR_{i}", *b))
+        print(f"  路缘：外 {len(curb_l)} + 内 {len(curb_r)}")
 
-    print(f"输出 world：{output}")
-    world_name = os.path.splitext(os.path.basename(output))[0]
-    write_sdf_world(boxes_left, boxes_right, output, world_name)
+    # ── 5. 障碍 ──
+    obs_boxes = []
+    if args.obstacles:
+        obs_boxes = extract_obstacles_from_image(
+            args.obstacles, img_h, args.obs_min_area, args.obs_height)
+        print(f"  障碍（从图片）：{len(obs_boxes)} 个")
+    else:
+        # 尝试从道路图检测红色
+        color = load_color(args.image)
+        obs_boxes = extract_obstacles_from_red(
+            color, img_h, args.obs_min_area, args.obs_height)
+        if obs_boxes:
+            print(f"  障碍（从红色）：{len(obs_boxes)} 个")
+
+    for i, b in enumerate(obs_boxes):
+        all_boxes.append((f"obs_{i}", *b))
+
+    # ── 6. 输出 ──
+    print(f"输出：{output}（{len(all_boxes)} 个 model）")
+    write_world(all_boxes, output, world_name)
     print("完成")
 
 
