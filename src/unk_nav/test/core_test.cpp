@@ -1004,7 +1004,7 @@ void testParamsIo() {
   // 类型不可转换 → 拒绝
   {
     std::ofstream f(path);
-    f << "astar_max_iter: abc\n";
+    f << "smooth_laplacian_iters: abc\n";
   }
   check(!unk::loadNavParams(path, &q, &err), "类型错误：拒绝加载");
 
