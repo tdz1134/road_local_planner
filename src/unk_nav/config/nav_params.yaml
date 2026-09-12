@@ -48,7 +48,8 @@ sensor_range: 20.0          # 激光有效量程 m。lookahead/subgoal_min 都�
 inflation_radius: 0.7      # 【当前实验值，偏大】推荐 0.7~0.9；若 goal_snap_dist <
                             # 带半宽，子目标落进带里时 A* 吸附逃不出（现已由射线截断兜底）
 footprint_clear_radius: 0.50  # 车体足迹清空半径 m（膨胀后把车脚下掏空，防起点死锁）。
-                              # 必须 ≥ robot_radius 且 < inflation_radius
+                              # 只抹「膨胀出来的」格，lidar 真打到的障碍在本半径内
+                              # 仍保持 occupied。必须 ≥ robot_radius 且 < inflation_radius
 inflate_unknown: false      # unknown 是否也膨胀成障碍。true=保守（不确定的当障碍），
                             # false=乐观探索（默认，未知区可通行但代价略高）
 

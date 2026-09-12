@@ -19,7 +19,12 @@ GridMap inflate(const GridMap& in, double radius, bool inflate_unknown = false);
 
 // 车体足迹强制清空：以 (cx,cy) 为圆心、radius 为半径内的格置为 free。
 // 必须在 inflate 之后调用，否则膨胀层会把车自己判成障碍 → A* 起点即死锁。
-void clearFootprint(GridMap* g, double cx, double cy, double radius);
+// raw != nullptr 时只清「膨胀出来的」格：raw（膨胀前的原始栅格）里本就
+// occupied 的格保持 occupied。于是车贴墙到 radius 以内时，脚下真障碍不再被足迹
+// 洞抹平；而车中心格在 raw 里必为 free/unknown，仍被清成 free → 起点死锁保护
+// 不受影响。raw 与 *g 尺寸/分辨率/原点不一致时视为未提供，退回无条件清空。
+void clearFootprint(GridMap* g, double cx, double cy, double radius,
+                    const GridMap* raw = nullptr);
 
 // 线段是否可通行：按 resolution 步进采样。
 // occupied 或越界 → false；unknown → 放行（乐观）。

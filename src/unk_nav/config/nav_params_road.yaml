@@ -29,7 +29,9 @@ sensor_range: 20.0          # 激光有效量程 m。road_lookahead 也乘这个
 # ── 栅格预处理 ──
 inflation_radius: 0.7       # 【沿路专用】走廊 6m 宽，膨胀带两侧共 1.4m，留 4.6m 通行。
                             # 太大（如默认 1.5）会把走廊夹死 → A* 无解 → RECOVERY/ABORT
-footprint_clear_radius: 0.50  # 车体足迹清空半径 m（≥robot_radius 且 <inflation_radius）
+footprint_clear_radius: 0.50  # 车体足迹清空半径 m（≥robot_radius 且 <inflation_radius）。
+                            # 只抹「膨胀出来的」格；lidar 真打到的墙在本半径内仍保持
+                            # occupied（否则贴墙时近场被抹平 → 撞墙前最后 0.5m 盲区）
 inflate_unknown: false      # unknown 乐观放行
 
 # ── 滚动时域规划 ──

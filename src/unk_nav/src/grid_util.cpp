@@ -74,14 +74,25 @@ GridMap inflate(const GridMap& in, double radius, bool inflate_unknown) {
   return out;
 }
 
-void clearFootprint(GridMap* g, double cx, double cy, double radius) {
+void clearFootprint(GridMap* g, double cx, double cy, double radius,
+                    const GridMap* raw) {
   if (g == nullptr || g->empty() || radius <= 0.0) return;
   int gx0 = 0, gy0 = 0;
   if (!g->worldToGrid(cx, cy, &gx0, &gy0)) return;  // 车体不在窗口内，异常输入
+  // raw 必须是与 *g 同规格的栅格（即 inflate 的入参），否则无从分辨「膨胀出来的」
+  // 和「本来就是」障碍 —— 这时退回无条件清空，不静默错判。
+  const bool use_raw =
+      raw != nullptr && !raw->empty() && raw->width == g->width &&
+      raw->height == g->height &&
+      std::fabs(raw->resolution - g->resolution) < 1e-9 &&
+      std::fabs(raw->origin_x - g->origin_x) < 1e-9 &&
+      std::fabs(raw->origin_y - g->origin_y) < 1e-9;
   const auto kern = diskKernel(radius, g->resolution);
   for (const auto& d : kern) {
     const int nx = gx0 + d.first, ny = gy0 + d.second;
     if (!g->inBounds(nx, ny)) continue;
+    // 保留 lidar 真打到的障碍：足迹洞只该抹掉膨胀带，不该抹掉墙本身
+    if (use_raw && (*raw).data[indexOf(*raw, nx, ny)] >= kOccupyThreshold) continue;
     g->data[indexOf(*g, nx, ny)] = kFree;
   }
 }

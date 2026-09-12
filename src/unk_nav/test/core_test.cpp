@@ -242,6 +242,26 @@ void testGrid() {
   check(gf.valueAtCell(10, 10) == unk::kFree, "clearFootprint 清掉车体所在格");
   check(gf.feasibleAt(0.0, 0.0), "clearFootprint 后车体位置可行");
 
+  // 足迹洞只该抹膨胀带，不该抹 lidar 真打到的墙。否则车贴墙到 footprint 半径以内时
+  // 近场被抹平，膨胀带与弦碰撞检测一起失效（= 撞墙前最后一段盲区）。
+  unk::GridMap tr = makeGrid(2.0, 0.1, unk::kFree);
+  setCell(&tr, 11, 10, unk::kOccupied);  // 真墙格：离车心 0.15m，落在足迹盘(0.12)内
+  unk::GridMap t_old = unk::grid::inflate(tr, 0.25);
+  unk::grid::clearFootprint(&t_old, 0.0, 0.0, 0.12);
+  check(t_old.valueAtCell(11, 10) == unk::kFree,
+        "不传 raw：脚下真墙被足迹洞抹平（旧行为，仅供不传 raw 的调用点）");
+  unk::GridMap t_new = unk::grid::inflate(tr, 0.25);
+  unk::grid::clearFootprint(&t_new, 0.0, 0.0, 0.12, &tr);
+  check(t_new.valueAtCell(11, 10) >= unk::kOccupyThreshold,
+        "传 raw：足迹盘内的 lidar 真障碍保持 occupied");
+  check(t_new.valueAtCell(10, 10) == unk::kFree && t_new.feasibleAt(0.0, 0.0),
+        "传 raw：车中心格（raw 为 free、仅被膨胀污染）仍清成 free → 起点不死锁");
+  check(t_new.valueAtCell(10, 8) >= unk::kOccupyThreshold, "传 raw：盘外膨胀带不受影响");
+  unk::GridMap t_bad = unk::grid::inflate(tr, 0.25);
+  const unk::GridMap bad_raw = makeGrid(1.0, 0.1, unk::kFree);  // 规格与 t_bad 不符
+  unk::grid::clearFootprint(&t_bad, 0.0, 0.0, 0.12, &bad_raw);
+  check(t_bad.valueAtCell(11, 10) == unk::kFree, "raw 规格不符：退回无条件清空");
+
   // 视线检查
   unk::GridMap w = makeGrid(4.0, 0.05, unk::kFree);
   fillRect(&w, -0.05, -2.0, 0.05, 2.0, unk::kOccupied);  // x=0 处横墙

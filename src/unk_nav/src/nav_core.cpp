@@ -99,9 +99,14 @@ NavResult NavCore::plan(const NavInput& in) {
 
   // ---- 2) 栅格预处理：膨胀 + 车体足迹清洞 ----
   // 顺序不可颠倒：先膨胀再清洞，否则膨胀层会把车自己埋进障碍，A* 起点即死锁。
+  // 传 raw：足迹洞只抹掉「膨胀出来的」格，lidar 真打到的墙保持 occupied。
+  // 否则车贴墙到 footprint_clear_radius 以内时近场被抹平，规划器以为脚下是空地
+  // （膨胀带与弦碰撞检测全部失效）。车中心格在 raw 里必为 free/unknown，仍被清成
+  // free，所以上面的死锁保护不受影响。
   if (!in.local_grid.empty()) {
     work_grid_ = grid::inflate(in.local_grid, p_.inflation_radius, p_.inflate_unknown);
-    grid::clearFootprint(&work_grid_, 0.0, 0.0, p_.footprint_clear_radius);
+    grid::clearFootprint(&work_grid_, 0.0, 0.0, p_.footprint_clear_radius,
+                         &in.local_grid);
   } else {
     work_grid_ = GridMap();
   }
