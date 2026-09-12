@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<!--
+  loop_road.launch：无定位、沿闭合环形道路行驶（follow_road=true）
+
+  世界：loop_road.world —— 首尾闭合的纯道路（直道 + 小曲率缓弯 + 适中 U 形弯），
+        路宽 6m、无障碍。由 scripts/gen_road_world.py 参数化生成。
+
+  一键启动：Gazebo(loop_road) + Scout v2 + 栅格 + 导航(沿路模式) + RViz
+
+  与 loop_goal.launch（有定位终点导航）的区别：
+    · 导航配置：nav_params_road.yaml（follow_road=true）—— NavCore 从路缘走廊几何
+      直接推车头系前瞻子目标，**完全不读定位/全局终点**，会一直跟着闭合环路绕圈。
+    · 默认不启动 localization_node（体现"无定位"）：规划只用 base 系栅格。
+      要 body 系车速与 RViz 真值可视化，设 use_localization:=true。
+    · RViz Fixed Frame 需为 base_link：沿路模式路径以 base_link 系发布，
+      车在原点、走廊随车滚动（unk_nav.rviz 里手动改 Fixed Frame）。
+
+  用法：
+    roslaunch unk_nav_sim loop_road.launch
+    roslaunch unk_nav_sim loop_road.launch use_localization:=true   # 供车速 + odom 真值
+    roslaunch unk_nav_sim loop_road.launch gui:=false               # 无头模式
+-->
+<launch>
+
+  <arg name="gui" default="true"/>
+  <arg name="use_localization" default="false"/>
+
+  <!-- 出生点：第一段直道上，车头朝 +X（沿环路逆时针出发）。与 world 的 SPAWN 一致 -->
+  <arg name="x"   default="2.0"/>
+  <arg name="y"   default="0.0"/>
+  <arg name="yaw" default="0.0"/>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 1. Gazebo + loop_road（闭合环形道路）                        -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name"   value="$(find unk_nav_sim)/worlds/loop_road.world"/>
+    <arg name="paused"       value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui"          value="$(arg gui)"/>
+    <arg name="headless"     value="false"/>
+    <arg name="debug"        value="false"/>
+  </include>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 2. Scout v2（含 Velodyne HDL-32E + robot_state_publisher）  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <include file="$(find scout_gazebo_sim)/launch/spawn_scout_v2.launch">
+    <arg name="x"   value="$(arg x)"/>
+    <arg name="y"   value="$(arg y)"/>
+    <arg name="z"   value="0.0"/>
+    <arg name="yaw" value="$(arg yaw)"/>
+  </include>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 3. 定位（可选）：仅供 body 系车速与 RViz 真值可视化；        -->
+  <!--    沿路规划不读 pose，关掉它才是"无定位"的完整体现          -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="localization_node" pkg="unk_nav_sim" type="localization_node"
+        output="screen" if="$(arg use_localization)">
+    <param name="model_name" value="scout/"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 4. 栅格节点（/velodyne_points → /local_grid，base_link 系）  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="grid_node" pkg="unk_nav_sim" type="grid_node" output="screen">
+    <rosparam file="$(find unk_nav_sim)/config/grid_params.yaml" command="load"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 5. 导航节点（沿路模式：nav_params_road.yaml，follow_road=true）-->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="nav_node" pkg="unk_nav_sim" type="nav_node" output="screen">
+    <param name="config_file" value="$(find unk_nav)/config/nav_params_road.yaml"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 6. RViz（Fixed Frame=base_link，车在原点、走廊随车滚动）     -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find unk_nav_sim)/config/unk_nav.rviz"
+        required="false"/>
+
+</launch>

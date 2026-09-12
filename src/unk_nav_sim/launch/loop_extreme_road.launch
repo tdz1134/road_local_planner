@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<!--
+  loop_extreme_road.launch：无定位、沿极端闭合环道路行驶（follow_road=true）
+
+  世界：loop_extreme.world —— 由 scripts/gen_road_world.py -p extreme 生成的
+        极端闭合环：路宽 3.0m（净通行仅 1.6m）+ S形chicane(R3 左右背靠背 90°)
+        + 180°发夹弯(R=2.5，内侧可行环带 1.4~3.8m)，首尾闭合、无障碍。
+
+  ⚠ 本场景是能力边界测试，不是日常演示：
+    · 发夹弯处车头扇形 ±75° 内所有射线 ~2m 内撞墙，d_free 全员截断，
+      打分退化为纯车头对齐 —— 预期看到明显的贴缝转向，甚至 RECOVERY。
+    · 路宽 3m 对 inflation_radius 敏感：0.7 可用（净 1.6m），≥1.0 会把走廊
+      直接封死（2×inflation ≥ 路宽）——不要调大膨胀再跑本场景。
+    · nav 配置复用 nav_params_road.yaml，未为本场景单开参数文件。
+
+  用法：
+    roslaunch unk_nav_sim loop_extreme_road.launch
+    roslaunch unk_nav_sim loop_extreme_road.launch use_localization:=true
+    roslaunch unk_nav_sim loop_extreme_road.launch gui:=false
+  RViz Fixed Frame 需手动改为 base_link（沿路模式路径以 base_link 系发布）。
+-->
+<launch>
+
+  <arg name="gui" default="true"/>
+  <arg name="use_localization" default="false"/>
+
+  <!-- 出生点：第一段 15m 直道上，车头朝 +X。与 world 的 SPAWN 一致 -->
+  <arg name="x"   default="2.0"/>
+  <arg name="y"   default="0.0"/>
+  <arg name="yaw" default="0.0"/>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 1. Gazebo + loop_extreme（极端闭合环道路）                  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name"   value="$(find unk_nav_sim)/worlds/loop_extreme.world"/>
+    <arg name="paused"       value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui"          value="$(arg gui)"/>
+    <arg name="headless"     value="false"/>
+    <arg name="debug"        value="false"/>
+  </include>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 2. Scout v2（含 Velodyne HDL-32E + robot_state_publisher）  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <include file="$(find scout_gazebo_sim)/launch/spawn_scout_v2.launch">
+    <arg name="x"   value="$(arg x)"/>
+    <arg name="y"   value="$(arg y)"/>
+    <arg name="z"   value="0.0"/>
+    <arg name="yaw" value="$(arg yaw)"/>
+  </include>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 3. 定位（可选）：仅供 body 系车速与 RViz 真值可视化；        -->
+  <!--    沿路规划不读 pose，关掉它才是"无定位"的完整体现          -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="localization_node" pkg="unk_nav_sim" type="localization_node"
+        output="screen" if="$(arg use_localization)">
+    <param name="model_name" value="scout/"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 4. 栅格节点（/velodyne_points → /local_grid，base_link 系）  -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="grid_node" pkg="unk_nav_sim" type="grid_node" output="screen">
+    <rosparam file="$(find unk_nav_sim)/config/grid_params.yaml" command="load"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 5. 导航节点（沿路模式：nav_params_road.yaml，follow_road=true）-->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="nav_node" pkg="unk_nav_sim" type="nav_node" output="screen">
+    <param name="config_file" value="$(find unk_nav)/config/nav_params_road.yaml"/>
+  </node>
+
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <!-- 6. RViz（Fixed Frame=base_link，车在原点、走廊随车滚动）     -->
+  <!-- ══════════════════════════════════════════════════════════ -->
+  <node name="rviz" pkg="rviz" type="rviz"
+        args="-d $(find unk_nav_sim)/config/unk_nav.rviz"
+        required="false"/>
+
+</launch>
