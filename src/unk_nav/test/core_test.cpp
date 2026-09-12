@@ -7,6 +7,7 @@
 //   astar     —— 直路 / 带缺口墙 / 实心墙 / U 形墙（凹障碍）/ 全 unknown /
 //                越界子目标 / 起点被困 / 迭代护栏 / 禁止穿角 / 膨胀闭口
 //   params_io —— YAML 加载：正常/缺省保留/未知 key/类型错/文件不存在
+//   controller —— 纯跟踪前视点选取（含车已前移时）/ 弦收缩 / 限幅 / 指令斜率限幅
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -16,6 +17,7 @@
 
 #include "unk_nav/astar.h"
 #include "unk_nav/behavior_fsm.h"
+#include "unk_nav/controller.h"
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/nav_core.h"
@@ -1012,6 +1014,64 @@ void testParamsIo() {
   std::remove(path);
 }
 
+// ── controller ──────────────────────────────────────────
+
+void testController() {
+  group("controller");
+
+  // L 形路径：先沿 +x 走 2m 再折向 +y 走 2m（弧长 s = 0 / 2 / 4）
+  const std::vector<unk::Point2D> poly = {{0.0, 0.0}, {2.0, 0.0}, {2.0, 2.0}};
+  const unk::Path path = unk::geom::toPath(poly);
+  const unk::GridMap open = makeGrid(10.0, 0.1, unk::kFree);
+  unk::PurePursuitController ctl(0.8, 1.5);
+
+  // 1) 车在规划原点：前视点落在直段上 → 不该有角速度
+  const auto c0 = ctl.compute(path, 1.0, open);
+  checkNear(c0.v, 1.0, 1e-12, "线速度 = 推荐速度");
+  checkNear(c0.w, 0.0, 1e-9, "车在原点：直段前视点 → w=0");
+  // 2) 显式传零位姿必须与省略该实参完全一致（向后兼容硬要求）
+  const auto c0b = ctl.compute(path, 1.0, open, unk::Pose2D());
+  checkNear(c0b.w, c0.w, 1e-15, "car 默认值与显式零位姿等价");
+
+  // 3) 车已走到拐角前 (1.9,0)：前视点必须跨过拐角落到 +y 段 → 提前起转
+  const auto c1 = ctl.compute(path, 1.0, open, unk::Pose2D{1.9, 0.0, 0.0});
+  check(c1.w > 0.5, "车前移后前视点跨过拐角 → 提前起转 (got " + f2s(c1.w) + ")");
+  check(std::fabs(c0.w) < 1e-9 && c1.w > 0.5,
+        "同一缓存路径：不修正车位置时每 tick 都是同一条指令");
+
+  // 4) 车头偏左且位置偏左 → 必须往右拉
+  const auto c2 = ctl.compute(path, 1.0, open, unk::Pose2D{1.0, 0.3, 0.35});
+  check(c2.w < 0.0, "车偏左+航向偏左 → 右拉 (got " + f2s(c2.w) + ")");
+
+  // 5) 角速度限幅取构造入参 w_max
+  const auto c3 = ctl.compute(path, 3.0, open, unk::Pose2D{1.99, 0.0, 0.0});
+  checkNear(c3.w, 1.5, 1e-12, "角速度被 w_max 限幅");
+
+  // 6) 弦撞墙 → 前视点从远处收缩到拐角前，角速度随之变小
+  unk::GridMap wall = makeGrid(10.0, 0.1, unk::kFree);
+  fillRect(&wall, 1.9, 1.0, 2.1, 1.1, unk::kOccupied);  // 竖着挡在拐角内侧
+  const auto c4 = ctl.compute(path, 1.0, wall, unk::Pose2D{1.9, 0.0, 0.0});
+  check(c4.w < 0.1 && c4.w < c1.w, "弦撞墙 → 前视点收缩 (got " + f2s(c4.w) + ")");
+
+  // 7) 退化输入
+  check(ctl.compute(unk::Path(), 1.0, open).w == 0.0, "空路径 → 零指令");
+  check(ctl.compute(path, 0.005, open).v == 0.0, "速度<=0.01 → 零指令");
+
+  // 8) 指令斜率限幅
+  unk::TwistSlewLimiter slew(3.0, 6.0);
+  const unk::TwistCmd want{1.5, 1.5};
+  const auto s1 = slew.limit(want, 0.02);
+  checkNear(s1.v, 0.06, 1e-12, "首 tick 线速度受 cmd_a_max 限制 (3.0×0.02)");
+  checkNear(s1.w, 0.12, 1e-12, "首 tick 角速度受 cmd_w_dot_max 限制 (6.0×0.02)");
+  auto sN = s1;
+  for (int i = 0; i < 200; ++i) sN = slew.limit(want, 0.02);
+  checkNear(sN.v, 1.5, 1e-12, "持续斜坡后到达目标线速度");
+  checkNear(sN.w, 1.5, 1e-12, "持续斜坡后到达目标角速度");
+  slew.reset();
+  checkNear(slew.limit(want, 0.02).v, 0.06, 1e-12, "reset 后重新从 0 斜坡（急停再起步）");
+  checkNear(slew.limit(want, 0.0).v, 1.5, 1e-12, "dt<=0 原样透传（未启用）");
+}
+
 int main() {
   std::printf("unk_nav core_test —— 离线单测（无 ROS）\n");
   testGeom();
@@ -1022,6 +1082,7 @@ int main() {
   testSubgoal();
   testRoadFollow();
   testSpeed();
+  testController();
   testFsm();
   testNavCore();
   testNavCoreRoad();

@@ -247,6 +247,20 @@ struct NavParams {
   // 集成层直接 params.pursuit_lookahead 构造控制器，不再单独走参数服务器。
   double pursuit_lookahead = 0.5;  // 纯跟踪前视距离 m：调小贴线紧但抖，调大平滑但切内角深
 
+  // 控制环与规划环解耦：/cmd_vel 按 control_freq 发，子目标 + A* 按 plan_freq 跑。
+  // 两环同频时，车在一个周期内已经走了 v/freq（1.5m/s @ 10Hz = 15cm）才被重新指令
+  // 一次，纯跟踪等效滞后 7~15cm —— 这就是「跟不紧」的主要来源，与规划质量无关。
+  // 硬前提：高频控制必须拿到车在「规划时刻栅格系」下的当前位姿（见 compute() 的 car
+  // 入参）。否则车在原点假设不变 → 每 tick 算出同一条 (v,w)，高频只是把零阶保持
+  // 的指令重复发几遍，对被控对象完全没有改善。
+  double control_freq = 50.0;  // 控制频率 Hz；<=0 表示不拆环（与 plan_freq 同频）
+
+  // 指令斜率限幅（取底盘能力上限，见 scout2_control.yaml：3.0 m/s² / 6.0 rad/s²）。
+  // 不限幅则每条指令都让执行器饱和，响应永远追不上命令；限幅后又要求控制环足够
+  // 密（斜坡需要 >10Hz 才解析得出来），故与 control_freq 配套使用。
+  double cmd_a_max = 3.0;      // 线速度指令斜率上限 m/s²
+  double cmd_w_dot_max = 6.0;  // 角速度指令斜率上限 rad/s²
+
   double plan_freq = 10.0;  // 规划频率 Hz
 
   // ---- 沿路模式（无定位，路线 A：两侧路缘/墙夹出的走廊即道路）----

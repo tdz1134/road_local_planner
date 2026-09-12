@@ -18,7 +18,8 @@
 
 # ── 车辆能力（Scout v2 差速底盘）──
 v_max: 1.5                  # 最大线速度 m/s
-w_max: 0.8                  # 最大角速度 rad/s
+w_max: 1.5                  # 最大角速度 rad/s（Scout v2 仿真限速 2.0；旧值 0.8 只有 40%，
+                            # 发夹/急弯处角速度被削平 → 横向误差不收敛）
 a_decel_max: 1.0            # 最大减速度 m/s²
 a_lat_max: 1.5              # 最大横向加速度 m/s²
 robot_radius: 0.46          # 车体半径 m
@@ -92,3 +93,10 @@ recovery_max_retry: 3       # 重试上限，超过 → ABORT
 
 # ── 控制器 ──
 pursuit_lookahead: 0.8
+control_freq: 50.0          # 控制环频率 Hz，与 plan_freq 解耦。沿路模式无 odom 时，
+                            # 控制层靠积分自己发出的指令得到周期内相对位姿（100ms 内
+                            # 漂移为二阶小量）。<=0 = 不拆环
+                            # 【注】不拆环时高频无意义：整条沿路链路只吃 base 系栅格，
+                            # 栅格 10Hz 刷新，车不在原点修正→每 tick 算出同一条指令
+cmd_a_max: 3.0              # 线速度指令斜率限幅 m/s²（急停不走限幅，由调用方直接清零）
+cmd_w_dot_max: 6.0          # 角速度指令斜率限幅 rad/s²

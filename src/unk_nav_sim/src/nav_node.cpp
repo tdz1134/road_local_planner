@@ -5,6 +5,12 @@
 //       订阅 ROS 话题 → 组装 unk::NavInput → 调用 unk::NavCore::plan()
 //       → 调用 unk::PurePursuitController → 发布 geometry_msgs::Twist
 //
+// 两个定时器（控制环与规划环解耦）：
+//   planCb   按 plan_freq（默认 10Hz）跑子目标 + A* + 限速，结果缓存下来；
+//   controlCb 按 control_freq（默认 50Hz）拿缓存路径算 (v,w) 并发 /cmd_vel。
+//   两者分开才有意义：同频时车在一个周期内已走了 v/freq（1.5m/s@10Hz=15cm）才被
+//   重新指令一次。控制环用 currentCarInPlanFrame() 补回车在当前栅格系里的位置。
+//
 // 本文件不含任何算法，所有规划与控制逻辑在 unk_nav 库中。
 //
 // 参数：全部算法参数读自 unk_nav/config/nav_params.yaml（unk::loadNavParams）。
@@ -44,6 +50,7 @@
 
 #include "unk_nav/nav_core.h"
 #include "unk_nav/controller.h"
+#include "unk_nav/geom_util.h"
 #include "unk_nav/params_io.h"
 #include "unk_nav/types.h"
 
@@ -80,6 +87,14 @@ public:
     core_ = std::make_unique<unk::NavCore>(params_);
     controller_ = std::make_unique<unk::PurePursuitController>(
         params_.pursuit_lookahead, params_.w_max);
+    slew_ = std::make_unique<unk::TwistSlewLimiter>(params_.cmd_a_max,
+                                                   params_.cmd_w_dot_max);
+    // 控制频率不高于规划频率时拆环没有信息增益（缓存路径不会变得更新），
+    // 此时退回与规划同频，行为等同于旧版单定时器。
+    const double ctrl_hz =
+        (params_.control_freq > params_.plan_freq) ? params_.control_freq
+                                                   : params_.plan_freq;
+    ctrl_dt_ = 1.0 / ctrl_hz;
 
     // ── 话题：订阅 ──
     sub_odom_ = nh.subscribe("/odom", 10, &NavNode::odomCb, this);
@@ -99,9 +114,14 @@ public:
 
     // ── 规划定时器 ──
     timer_ = nh.createTimer(ros::Duration(1.0 / params_.plan_freq), &NavNode::planCb, this);
+    // 控制定时器：默认单线程 spinner，两个定时器回调与订阅回调串在同一线程，
+    // 故 workGrid() / 缓存路径的读写不需要加锁。
+    ctrl_timer_ = nh.createTimer(ros::Duration(ctrl_dt_), &NavNode::controlCb, this);
 
-    ROS_INFO("[nav_node] 启动：plan_freq=%.1fHz, sensor_range=%.1fm, v_max=%.2fm/s",
-             params_.plan_freq, params_.sensor_range, params_.v_max);
+    ROS_INFO("[nav_node] 启动：plan_freq=%.1fHz control_freq=%.1fHz, "
+             "sensor_range=%.1fm, v_max=%.2fm/s w_max=%.2frad/s",
+             params_.plan_freq, 1.0 / ctrl_dt_, params_.sensor_range, params_.v_max,
+             params_.w_max);
   }
 
 private:
@@ -133,6 +153,8 @@ private:
 
     // 通知 NavCore 终点变化（清除 ARRIVED/ABORT 锁存）
     core_->reset();
+    // 旧终点的路径不能再当指令源：等下一帧规划重新有路径才恢复发速
+    have_plan_ = false;
 
     ROS_INFO("[nav_node] 收到新终点: (%.2f, %.2f)", goal_.x, goal_.y);
   }
@@ -163,24 +185,21 @@ private:
     pub_work_grid_.publish(
         toRosGrid(core_->workGrid(), latest_grid_.header.frame_id));
 
-    // ── 3. 计算速度指令 ──
-    geometry_msgs::Twist cmd;
-    if (result.emergency_stop || result.state == unk::NavState::ABORT ||
-        result.state == unk::NavState::IDLE) {
-      // 急停 / 放弃 / 无目标 → 零速
-      cmd.linear.x = 0.0;
-      cmd.angular.z = 0.0;
-    } else if (result.state == unk::NavState::ARRIVED) {
-      cmd.linear.x = 0.0;
-      cmd.angular.z = 0.0;
-    } else {
-      // GO / RECOVERY → 纯跟踪（传入膨胀后的工作栅格做弦碰撞检测）
-      unk::TwistCmd tc = controller_->compute(result.path, result.recommended_speed,
-                                              core_->workGrid());
-      cmd.linear.x = tc.v;
-      cmd.angular.z = tc.w;
-    }
-    pub_cmd_.publish(cmd);
+    // ── 3. 缓存本帧规划输出给控制环发速；速度指令不在这里发 ──
+    // 缓存的 path 与 work_grid 同在「本帧规划时刻的车体系」，控制环靠
+    // currentCarInPlanFrame() 把车已走开的那一段补回来。
+    ctrl_path_ = result.path;
+    ctrl_speed_ = result.recommended_speed;
+    // 路径为空时 compute() 本就返回零速，这里显式归入停车一类，避免沿用旧缓存
+    ctrl_stop_ = result.emergency_stop || ctrl_path_.empty() ||
+                 result.state == unk::NavState::ABORT ||
+                 result.state == unk::NavState::IDLE ||
+                 result.state == unk::NavState::ARRIVED;
+    have_plan_ = true;
+    // 重新锚定相对位姿：从此刻起车就是这个 path/grid 系的原点
+    rel_ = unk::Pose2D();
+    plan_pose_ = current_pose_;
+    plan_pose_valid_ = has_odom_;
 
     // ── 4. 发布状态 ──
     std_msgs::String state_msg;
@@ -204,6 +223,59 @@ private:
         result.recommended_speed,
         result.path.size(),
         result.reason.c_str());
+  }
+
+  // ── 定时器：控制主循环（只发 /cmd_vel，不做任何规划）──
+  void controlCb(const ros::TimerEvent&) {
+    geometry_msgs::Twist cmd;  // 默认全零
+    // 还没规划过 / 急停 / 终态 / 无路径 → 立即零速，且绕过斜率限幅：
+    // 限幅只用于把正常行驶抹柔，绝不能拖慢「能立刻停住」这件事。
+    if (!have_plan_ || ctrl_stop_) {
+      slew_->reset();
+      pub_cmd_.publish(cmd);
+      return;
+    }
+
+    const unk::Pose2D car = currentCarInPlanFrame();
+    unk::TwistCmd tc = controller_->compute(ctrl_path_, ctrl_speed_,
+                                            core_->workGrid(), car);
+    tc = slew_->limit(tc, ctrl_dt_);
+    cmd.linear.x = tc.v;
+    cmd.angular.z = tc.w;
+    pub_cmd_.publish(cmd);
+    // 把这一 tick 走掉的位移记入相对位姿，供下个 tick 使用
+    integrateRel(tc);
+  }
+
+  // 车在「规划时刻车体系」（= 缓存 path 与 work_grid 所在系）下的当前位姿。
+  // 有 odom：用 odom 位姿差 T_plan⁻¹·T_now，实测值，准；
+  // 无 odom（沿路不定位）：退化为积分自己发出的 (v,w)。一个规划周期（100ms）内
+  // 轮地滑移只是二阶小量，远小于 10Hz 零阶保持本身带来的 15cm 滞后。
+  unk::Pose2D currentCarInPlanFrame() const {
+    if (plan_pose_valid_ && has_odom_) {
+      const double dx = current_pose_.x - plan_pose_.x;
+      const double dy = current_pose_.y - plan_pose_.y;
+      const double c = std::cos(plan_pose_.yaw), s = std::sin(plan_pose_.yaw);
+      unk::Pose2D r;
+      r.x = c * dx + s * dy;
+      r.y = -s * dx + c * dy;
+      r.yaw = unk::geom::normalizeAngle(current_pose_.yaw - plan_pose_.yaw);
+      return r;
+    }
+    return rel_;
+  }
+
+  // 常值 (v, w) 的圆弧精确积分（|w| 极小时退化为直线，避开 v/w 除零）
+  void integrateRel(const unk::TwistCmd& tc) {
+    if (std::fabs(tc.w) < 1e-3) {
+      rel_.x += tc.v * ctrl_dt_ * std::cos(rel_.yaw);
+      rel_.y += tc.v * ctrl_dt_ * std::sin(rel_.yaw);
+      return;
+    }
+    const double dth = tc.w * ctrl_dt_;
+    rel_.x += (tc.v / tc.w) * (std::sin(rel_.yaw + dth) - std::sin(rel_.yaw));
+    rel_.y -= (tc.v / tc.w) * (std::cos(rel_.yaw + dth) - std::cos(rel_.yaw));
+    rel_.yaw = unk::geom::normalizeAngle(rel_.yaw + dth);
   }
 
   // ── nav_msgs/OccupancyGrid → unk::GridMap ──
@@ -269,6 +341,7 @@ private:
   unk::NavParams params_;
   std::unique_ptr<unk::NavCore> core_;
   std::unique_ptr<unk::PurePursuitController> controller_;
+  std::unique_ptr<unk::TwistSlewLimiter> slew_;
 
   // 状态
   bool has_odom_ = false;
@@ -280,10 +353,20 @@ private:
   nav_msgs::Odometry latest_odom_;
   nav_msgs::OccupancyGrid latest_grid_;
 
+  // 控制环（与规划环解耦）：缓存本帧规划结果 + 周期内相对位姿
+  unk::Path ctrl_path_;
+  double ctrl_speed_ = 0.0;
+  bool have_plan_ = false;
+  bool ctrl_stop_ = true;      // 初始为 true：首次规划前保持零速
+  double ctrl_dt_ = 0.1;
+  unk::Pose2D rel_;            // 无 odom：自上次规划以来的指令积分
+  unk::Pose2D plan_pose_;      // 上次规划时刻的 odom 位姿
+  bool plan_pose_valid_ = false;
+
   // ROS
   ros::Subscriber sub_odom_, sub_grid_, sub_goal_;
   ros::Publisher pub_cmd_, pub_path_, pub_state_, pub_work_grid_, pub_fan_, pub_goal_;
-  ros::Timer timer_;
+  ros::Timer timer_, ctrl_timer_;
 
   // ── 发布扇形候选可视化 ──
   // 单个 LINE_LIST Marker + 逐顶点着色：蓝色=候选射线，红色=选中
