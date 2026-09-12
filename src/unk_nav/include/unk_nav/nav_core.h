@@ -2,12 +2,11 @@
 // 门面：单周期总调度。外部只需要认识 NavCore + NavInput + NavResult 三个东西。
 //
 // 每周期内部流程：
-//   终点转车体系 → 栅格膨胀 + 足迹清洞 → 子目标投影 → 局部 A* → 速度规划 → 行为状态机
+//   终点转车体系 → 栅格膨胀 + 足迹清洞 → 子目标投影 → 直线路径 → 速度规划 → 行为状态机
 //
 // 跨周期状态只有两处：BehaviorFsm 的记忆，以及上一帧结果（调试用）。
 #include <string>
 
-#include "unk_nav/astar.h"
 #include "unk_nav/behavior_fsm.h"
 #include "unk_nav/types.h"
 
@@ -37,22 +36,12 @@ class NavCore {
   NavParams p_;
   fsm::BehaviorFsm fsm_;
   GridMap work_grid_;
-  astar::Workspace ws_;  // A* 搜索工作区，跨周期复用 → 每周期零堆分配
 
   bool have_goal_ = false;
   Point2D last_goal_;
   NavResult last_;
 
-  // 路径一致性（批次3）：上一帧输出路径存 odom 系，下一帧重投影到当前 base 系
-  // 作为 A* 的一致性吸引子。存 odom 而非 base：车每帧在动，base 系会漂移。
-  std::vector<Point2D> last_path_odom_;   // 上帧路径（odom 系）；空 = 无上帧
-  std::vector<Point2D> prev_path_base_;   // 每帧把 last_path_odom_ 换到当前 base 系的复用缓冲
-  // 沿路模式无 pose 可重投影，直接存/复用上一帧的 base 系路径（滞后约 v/freq，作为软吸引子足够）。
-  std::vector<Point2D> last_path_base_;   // 上帧路径（base 系），仅 follow_road 时使用
-  bool have_prev_path_ = false;
-
   // 子目标方向滞后（防翻烧饼）：存上帧选中的子目标方位角，传给 subgoal::project 作为打分参考。
-  // 与 have_prev_path_ 同类：换终点时清零，不能沿用旧方向记忆。
   double last_subgoal_bearing_ = 0.0;
   bool   have_last_bearing_ = false;
 };

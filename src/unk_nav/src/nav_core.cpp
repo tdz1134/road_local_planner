@@ -5,7 +5,6 @@
 #include <limits>
 #include <sstream>
 
-#include "unk_nav/astar.h"
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/path_smooth.h"
@@ -14,32 +13,6 @@
 #include "unk_nav/subgoal.h"
 
 namespace unk {
-
-// ── 内部辅助（仅本文件使用）──────────────────────────────────────
-namespace {
-
-astar::Options makeAstarOptions(const NavParams& p, double resolution) {
-  astar::Options o;
-  o.unknown_cost = p.unknown_cost;
-  o.max_iter = p.astar_max_iter;
-  o.w = p.astar_w;
-  o.soft_k = p.obstacle_cost_k;
-  o.soft_sigma = p.obstacle_cost_sigma;
-  // 吸附半径以米给出，这里才换算成格数 → 换分辨率时物理行为不变
-  o.goal_snap_radius =
-      resolution > 0.0 ? std::max(1, static_cast<int>(std::ceil(p.goal_snap_dist / resolution)))
-                       : 10;
-  // 倒角半径由目标过弯速度反解，同时满足 w = v/r <= w_max 与 v^2/r <= a_lat_max
-  o.smooth_fillet_radius =
-      smooth::filletRadiusForCornerSpeed(p.smooth_corner_speed, p.w_max, p.a_lat_max);
-  o.smooth_laplacian_iters = p.smooth_laplacian_iters;
-  o.smooth_laplacian_lambda = p.smooth_laplacian_lambda;
-  o.smooth_shrink_retry = p.smooth_shrink_retry;
-  o.curvature_baseline = p.curvature_baseline;
-  return o;
-}
-
-}  // namespace
 
 // ── 公共接口（在 nav_core.h 中声明）──────────────────────────────
 
@@ -51,10 +24,6 @@ void NavCore::reset() {
   have_goal_ = false;
   last_goal_ = Point2D();
   last_ = NavResult();
-  last_path_odom_.clear();
-  prev_path_base_.clear();
-  last_path_base_.clear();
-  have_prev_path_ = false;
   have_last_bearing_ = false;
 }
 
@@ -74,9 +43,6 @@ void NavCore::detectGoalChange(const NavInput& in) {
                          std::max(p_.goal_tolerance, 0.05);
   if (moved) {
     fsm_.newGoal();
-    // 换了目标：上帧路径通往旧目标，不能再当一致性吸引子，否则会把车拽向旧路。
-    have_prev_path_ = false;
-    last_path_odom_.clear();
     // 换终点不能沿用旧方向记忆
     have_last_bearing_ = false;
   }
@@ -133,25 +99,20 @@ NavResult NavCore::plan(const NavInput& in) {
                           have_last_bearing_ ? &last_subgoal_bearing_ : nullptr);
   }
 
-  // ---- 4) 局部 A* ----
+  // ---- 4) 直线路径（车→子目标）----
   Path path;
   if (sg.valid) {
-    astar::Options ao = makeAstarOptions(p_, work_grid_.resolution);
-    // 一致性软代价：把上帧路径作为吸引子。终点模式存 odom 系、每帧重投影到 base（车已
-    // 移动，必须重投影，否则一致性带会滞后错位）；沿路模式无 pose，直接复用 base 系上帧路径。
-    if (p_.consistency_k > 0.0 && have_prev_path_) {
-      if (p_.follow_road) {
-        ao.prev_path = &last_path_base_;
-      } else if (!last_path_odom_.empty()) {
-        prev_path_base_.clear();
-        prev_path_base_.reserve(last_path_odom_.size());
-        for (const auto& pw : last_path_odom_) {
-          prev_path_base_.push_back(geom::globalToBase(pw, in.vehicle_pose));
-        }
-        ao.prev_path = &prev_path_base_;
-      }
+    const double dx = sg.point.x, dy = sg.point.y;
+    const double len = std::hypot(dx, dy);
+    const int n = std::max(1, static_cast<int>(std::ceil(len / p_.path_spacing)));
+    for (int i = 0; i <= n; ++i) {
+      const double t = static_cast<double>(i) / n;
+      PathPoint nd;
+      nd.p = Point2D{dx * t, dy * t};
+      nd.s = len * t;
+      nd.k = 0.0;  // 直线曲率 0
+      path.push_back(nd);
     }
-    path = astar::plan(work_grid_, Point2D{0.0, 0.0}, sg.point, p_.path_spacing, ao, &ws_);
   }
 
   // ---- 5) 速度规划 ----
@@ -230,20 +191,6 @@ NavResult NavCore::plan(const NavInput& in) {
   r.recommended_speed = sp.emergency_stop ? 0.0 : sp.v;
   if (sp.emergency_stop) oss << " (estop:" << sp.limit_by << ")";
   r.reason = oss.str();
-  // 记住本帧路径供下一帧做一致性吸引子。仅成功出路径时更新；偶发失败帧保留更早的路径，
-  // 不因一帧丢记忆。终点模式存 odom 系（车每帧动，下帧重投影回 base）；沿路模式无 pose，直接存 base 系。
-  if (p_.follow_road) {
-    last_path_base_.clear();
-    last_path_base_.reserve(path.size());
-    for (const auto& pp : path) last_path_base_.push_back(pp.p);
-  } else {
-    last_path_odom_.clear();
-    last_path_odom_.reserve(path.size());
-    for (const auto& pp : path) {
-      last_path_odom_.push_back(geom::baseToGlobal(pp.p, in.vehicle_pose));
-    }
-  }
-  have_prev_path_ = true;
   // 存本帧子目标方位角供下帧方向滞后用
   if (sg.valid && !p_.follow_road) {
     last_subgoal_bearing_ = sg.bearing;

@@ -65,14 +65,10 @@ road_free_w: 2.0            # 打分权重：前方自由距离（越空越想�
 road_align_w: 1.0           # 打分权重：车头对齐 cosθ（越想直行 → 抑制无谓摆动）。
                             # 直路抖 → align_w↑；跟弯迟钝/切内墙 → free_w↑ 或 align_w↓
 
-# ── A* 搜索 ──
-astar_max_iter: 200000
+# ── A* 搜索（astar.h/cpp 保留，但 nav_core 不再调用；unknown_cost / obstacle_cost_* 保留供 astar 单测）──
 unknown_cost: 1.4
-astar_w: 1.0
 obstacle_cost_k: 1.0        # 障碍距离软代价：把路径推向走廊中央、离两侧墙更远（沿路居中的关键）
 obstacle_cost_sigma: 0.35
-consistency_k: 0.4          # 路径一致性软代价：抑制沿路时的每帧左右翻烧饼
-consistency_sigma: 0.4
 
 # ── 速度规划 ──
 safety_margin: 0.3

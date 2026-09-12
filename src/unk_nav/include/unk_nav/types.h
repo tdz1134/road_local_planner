@@ -180,22 +180,15 @@ struct NavParams {
   // 终点附近来回转圈）。因此这里没有 yaw_tolerance：需要定向停靠时，先加参数再加
   // 判定逻辑，不要留一个「设了但不生效」的旋钮骗集成方。
 
-  // ---- A* ----
-  int astar_max_iter = 200000;   // 迭代上限（安全护栏）
+  // ---- A*（astar.h/cpp 保留，但 nav_core 不再调用）----
+  // astar_max_iter / astar_w 已移除（nav_core 改用直线路径）
   double unknown_cost = 1.4;     // unknown 格代价倍率（>1 偏向已知区，仍可穿越）
-  // 启发式权重 f = g + w*h。1.0 = 严格最优（默认；仅靠「f 相等时 h 小者优先」打破
-  // 对称，扩展数已骤降）。>1（如 1.05）= 加权 A*，扩展更少但代价次优 ≤ w×。
-  double astar_w = 1.0;
   // 障碍距离软代价（批次2）：进入单格代价 = step×(1+obstacle_cost_k·exp(-d/obstacle_cost_sigma))，
   // d 为该格到最近障碍的距离。k<=0 关闭（默认）。启用后可把 inflation_radius 调薄：
   // 软梯度替代厚膨胀带把路径推向通道中央、离墙更远。代价因子恒 ≥1 → 不破坏 A* 最优性。
   double obstacle_cost_k = 0.0;
   double obstacle_cost_sigma = 0.35;   // 衰减尺度 m，约等于「想额外保持的离墙净空」
-  // 路径一致性软代价（批次3）：单格代价再加 consistency_k·(1-exp(-d_prev/consistency_sigma))，
-  // d_prev 为该格到上一帧路径的距离。解「轴对称镜像 f/g/h 全相等 → 每帧左右翻烧饼」的抖动：
-  // 沿上帧走天然更便宜。k<=0 关闭（默认）。只加不减 → 不破坏 A* 对新代价函数的最优性。
-  double consistency_k = 0.0;
-  double consistency_sigma = 0.4;      // 黏性走廊半宽 m；太大黏过头、该改道时反应慢
+  // consistency_k / consistency_sigma 已移除（nav_core 改用直线路径，无一致性吸引子）
   // 子目标落在障碍上时，螺旋吸附到最近可行格的搜索半径（**米**，不是格数）。
   // 用米而非格数：换栅格分辨率时物理含义不变，否则 res 从 0.05 改到 0.10
   // 吸附范围会悄悄翻倍。
