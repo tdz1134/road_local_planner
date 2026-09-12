@@ -1,28 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-gen_road_from_image.py —— 从图片生成闭合 loop 道路世界。
+gen_road_from_image.py —— 从图片生成闭合 loop 道路世界（v1.2）。
 
-图片规范 v1.1：
+图片规范：
   · 格式：PNG 或 JPG
-  · 道路图：黑色 (0,0,0) = 道路，白色 (255,255,255) = 背景
+  · 道路图：黑色 = 道路，白色 = 背景
   · 障碍图（可选，--obstacles）：黑色 = 障碍，白色 = 背景
-  · 或在道路图中用红色 (R>150, G<100, B<100) 标记障碍
+  · 或在道路图中用红色标记障碍
   · 分辨率：10 pixel/m（固定比例）
-  · 坐标系：图片左上角 = 世界原点 (0,0)，y 轴向下
+  · 坐标系：图片左上角 = 世界原点 (0,0)；x 向右增大，y 向下增大
+    （因此世界坐标全部在第一象限，y 轴与 ROS 惯例相反）
 
 用法：
     # 路缘模式（默认）
     python3 scripts/gen_road_from_image.py road.png
 
-    # 无障碍、只有墙壁边界
+    # 墙壁模式（更干净，适合无障碍测试）
+    python3 scripts/gen_road_from_image.py road.png --no-curb
+
+    # 墙壁 + 自适应高度（路越宽墙越高）
+    python3 scripts/gen_road_from_image.py road.png --no-curb --adaptive-wall
+
+    # 带障碍（道路图中红色标记）
     python3 scripts/gen_road_from_image.py road.png --no-curb
 
     # 带障碍（单独障碍图）
-    python3 scripts/gen_road_from_image.py road.png --no-curb --obstacles obstacles.png
+    python3 scripts/gen_road_from_image.py road.png --no-curb --obstacles obs.png
 
-    # 带障碍（道路图中红色标记）
-    python3 scripts/gen_road_from_image.py road_with_red.png --no-curb
+参数调整：
+    --simplify-tolerance 0.3   # 轮廓简化容差 m（越大越平滑，默认 0.3）
+    --smooth-sigma 3.0         # 高斯平滑 σ 像素（越大越圆滑，默认 3.0）
+    --wall-width 0.3           # 墙壁厚度 m（默认 0.3）
+    --wall-height 1.5          # 墙壁高度 m（默认 1.5）
+    --curb-height 1.5          # 路缘高度 m（默认 1.5）
+    --obs-height 1.5           # 障碍高度 m（默认 1.5）
+    --obs-min-area 0.5         # 最小障碍面积 m²（过滤噪点，默认 0.5）
 """
 
 import argparse
@@ -49,8 +62,10 @@ CURB_SEGMENT_LEN = 0.6    # 路缘段长 m
 CURB_SPACING = 0.4        # 路缘段间距 m
 
 # 墙壁模式默认参数
-WALL_WIDTH = 0.15         # 墙壁厚 m
-WALL_HEIGHT = 1.0         # 墙壁高 m
+WALL_WIDTH = 0.3          # 墙壁厚 m
+WALL_HEIGHT = 1.5         # 墙壁高 m
+WALL_SEGMENT_LEN = 0.6    # 墙壁段长 m
+WALL_SPACING = 0.4        # 墙壁段间距 m
 
 # 障碍默认参数
 OBS_HEIGHT = 1.5          # 障碍高 m
@@ -69,8 +84,9 @@ def load_binary(path):
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise FileNotFoundError(f"无法读取图片：{path}")
+    # 先二值化（红色障碍灰度≈76 < 128，会被标为道路 → 后续障碍检测从原彩色图做）
     _, binary = cv2.threshold(img, 128, 255, cv2.THRESH_BINARY)
-    # 形态学闭运算：填细小缺口、平滑边界锯齿
+    # 在二值图上做闭运算：填细小缺口、平滑边界锯齿
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                   (MORPH_KERNEL_PX, MORPH_KERNEL_PX))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k)
@@ -155,6 +171,58 @@ def gen_curb_boxes(wall_pts, width, height, seg_len, spacing):
         cy = p1[1] + t * (p2[1] - p1[1])
         yaw = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
         boxes.append((cx, cy, yaw, seg_len, width, height))
+        s += spacing
+    return boxes
+
+
+# ══════════════════ 自适应路宽 ══════════════════
+
+def compute_road_widths(outer_w, inner_w):
+    """对每个外圈点，找内圈最近点距离 → 路宽（米）。返回数组"""
+    from scipy.spatial import cKDTree
+    tree = cKDTree(inner_w)
+    dists, _ = tree.query(outer_w)
+    return dists  # 每个外圈点对应的路宽（米）
+
+
+def gen_adaptive_wall_boxes(wall_pts, road_widths, base_width, base_height,
+                            seg_len, spacing, min_h=0.8, max_h=2.5):
+    """沿轮廓生成墙壁 box，高度按路宽自适应缩放。
+    路宽 = median 时高度 = base_height；路宽越窄墙越矮，越宽墙越高。
+    """
+    boxes = []
+    n = len(wall_pts)
+    if n < 2:
+        return boxes
+    base_ref = float(np.median(road_widths)) if len(road_widths) > 0 else 10.0
+    seg_L = np.array([np.linalg.norm(wall_pts[(i+1) % n] - wall_pts[i])
+                      for i in range(n)])
+    cum = np.concatenate([[0.0], np.cumsum(seg_L)])
+    total = cum[-1]
+    # 路宽数组也按弧长参数化
+    rw_cum = np.linspace(0, total, len(road_widths))
+
+    s, idx = 0.0, 0
+    while s < total:
+        while idx < n and cum[idx + 1] <= s:
+            idx += 1
+        if idx >= n:
+            break
+        L = seg_L[idx]
+        if L < 1e-6:
+            s += spacing
+            continue
+        t = (s - cum[idx]) / L
+        p1, p2 = wall_pts[idx], wall_pts[(idx + 1) % n]
+        cx = p1[0] + t * (p2[0] - p1[0])
+        cy = p1[1] + t * (p2[1] - p1[1])
+        yaw = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+        # 插值路宽
+        rw = float(np.interp(s, rw_cum, road_widths))
+        # 高度按路宽比例缩放
+        h = base_height * (rw / base_ref) if base_ref > 0 else base_height
+        h = max(min_h, min(max_h, h))
+        boxes.append((cx, cy, yaw, seg_len, base_width, h))
         s += spacing
     return boxes
 
@@ -280,6 +348,8 @@ def main():
                     help=f"高斯平滑 σ 像素（默认 {GAUSS_SIGMA_PX}）")
     ap.add_argument("--wall-height", type=float, default=WALL_HEIGHT)
     ap.add_argument("--wall-width", type=float, default=WALL_WIDTH)
+    ap.add_argument("--adaptive-wall", action="store_true",
+                    help="墙壁高度按路宽自适应缩放（路越宽墙越高）")
     ap.add_argument("--curb-height", type=float, default=CURB_HEIGHT)
     ap.add_argument("--obs-height", type=float, default=OBS_HEIGHT)
     ap.add_argument("--obs-min-area", type=float, default=0.5,
@@ -326,11 +396,27 @@ def main():
     all_boxes = []  # [(name, cx, cy, yaw, L, W, H)]
 
     if args.no_curb:
-        # 墙壁模式：沿轮廓每 0.5m 放一个薄 box
-        wall_boxes_l = gen_curb_boxes(outer_w, args.wall_width,
-                                      args.wall_height, 0.6, 0.4)
-        wall_boxes_r = gen_curb_boxes(inner_w, args.wall_width,
-                                      args.wall_height, 0.6, 0.4)
+        # 墙壁模式
+        if args.adaptive_wall:
+            # 自适应高度：检测路宽，按路宽比例缩放墙高
+            print("  检测路宽（自适应模式）...")
+            rw_outer = compute_road_widths(outer_w, inner_w)
+            rw_inner = compute_road_widths(inner_w, outer_w)
+            wall_boxes_l = gen_adaptive_wall_boxes(
+                outer_w, rw_outer, args.wall_width, args.wall_height,
+                WALL_SEGMENT_LEN, WALL_SPACING)
+            wall_boxes_r = gen_adaptive_wall_boxes(
+                inner_w, rw_inner, args.wall_width, args.wall_height,
+                WALL_SEGMENT_LEN, WALL_SPACING)
+            print(f"  路宽范围：{min(rw_outer):.1f}~{max(rw_outer):.1f}m "
+                  f"（中位 {np.median(rw_outer):.1f}m）")
+        else:
+            wall_boxes_l = gen_curb_boxes(outer_w, args.wall_width,
+                                          args.wall_height,
+                                          WALL_SEGMENT_LEN, WALL_SPACING)
+            wall_boxes_r = gen_curb_boxes(inner_w, args.wall_width,
+                                          args.wall_height,
+                                          WALL_SEGMENT_LEN, WALL_SPACING)
         for i, b in enumerate(wall_boxes_l):
             all_boxes.append((f"wallL_{i}", *b))
         for i, b in enumerate(wall_boxes_r):

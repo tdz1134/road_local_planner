@@ -16,7 +16,7 @@
   <arg name="gui" default="true"/>
   <arg name="use_localization" default="false"/>
   <arg name="x"   default="15.0"/>
-  <arg name="y"   default="12.0"/>
+  <arg name="y"   default="11.5"/>
   <arg name="yaw" default="3.14"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
