@@ -169,8 +169,10 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
   r.candidates.reserve(n_steps + 1);
 
   for (int i = 0; i <= n_steps; ++i) {
-    const double dtheta = -fan_half + i * dstep;
-    const double theta = r.goal_bearing + dtheta;
+    // 扫描中心 = 车头朝向（θ=0），与沿路模式对称；终点方向不再作为扫描中心，
+    // 只通过 align 项与 tie-break 参与打分引导。
+    const double theta = -fan_half + i * dstep;
+    const double dtheta = geom::normalizeAngle(theta - r.goal_bearing);  // 与终点连线的偏差
     const double ux = std::cos(theta);
     const double uy = std::sin(theta);
 
@@ -254,7 +256,8 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
     r.candidates[best_idx].selected = true;
   }
 
-  r.fan_used = (best_idx != 0 || std::fabs(-fan_half + best_idx * dstep) > kEps);
+  // 走到这里必然是中心射线被截断后展开扇形选出了候选（快速路径已提前返回）
+  r.fan_used = true;
   r.point = Point2D{std::cos(r.bearing) * r.reach, std::sin(r.bearing) * r.reach};
   r.valid = true;
   return r;

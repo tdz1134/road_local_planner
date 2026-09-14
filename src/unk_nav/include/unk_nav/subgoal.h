@@ -8,9 +8,10 @@
 // 先沿终点方向（θ=goal_bearing）单射线投影。若中心方向一路空到前瞻距离 → 直接返回，
 // 零额外开销、行为与旧版单射线一致。
 // 仅当中心方向被障碍截短（d_free < reach_clip）时，才展开扇形候选：
-//   θᵢ = goal_bearing + i·Δ，i ∈ [-N, N]，Δ = subgoal_fan_step_deg
+//   θᵢ = i·Δ（以车头朝向 θ=0 为中心，与沿路模式对称），Δ = subgoal_fan_step_deg
+// 终点方向不作扫描中心，只经 align 项引导：选出的方向可能偏离终点连线（找绕行口）。
 // 每条候选量自由距离 reach_i = min(lookahead, t_win(θᵢ))，硬门槛 reach_i ≥ subgoalMin*0.5，
-// 打分 score = align_w·cos(θᵢ-θ_goal) + free_w·min(reach_i/subgoalMin, 1) + prev_w·cos(θᵢ-θ_prev)，
+// 打分 score = align_w·cos(θᵢ-θ_goal) + free_w·min(reach_i/lookahead, 1) + prev_w·cos(θᵢ-θ_prev)，
 // 取 argmax。侧向候选不受 goal_dist 限制（它们本就不是去终点，是找绕行口）。
 // subgoal_fan_half_deg=0 → 关闭扇形，退回单射线。
 #include <vector>
