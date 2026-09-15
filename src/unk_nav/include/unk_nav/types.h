@@ -195,12 +195,12 @@ struct NavParams {
   double goal_snap_dist = 0.5;
 
   // ---- 子目标扇形选取（终点模式专用，沿路模式不读）----
-  // 中心方向（θ=goal_bearing）被障碍截断时展开扇形候选，打分选优。
+  // 中心射线（车→终点连线）被障碍截断时，以车头朝向（θ=0）为中心展开扇形候选，打分选优。
   // subgoal_fan_half_deg=0 → 关闭扇形，退回单射线（与 subgoal_clearance=0 一起可完全复现旧行为）。
   double subgoal_fan_half_deg = 90.0;   // 扇形半角 deg；0=关闭扇形
   double subgoal_fan_step_deg = 5.0;    // 扇形角步长 deg
   double subgoal_align_w    = 3.0;      // 终点对齐权重 cos(θ-θ_goal)；必须 > subgoal_free_w
-  double subgoal_free_w     = 1.0;      // 饱和自由距离权重（饱和参考 = subgoalMin()）
+  double subgoal_free_w     = 1.0;      // 饱和自由距离权重（饱和参考 = lookahead）
   double subgoal_prev_w     = 1.0;      // 上帧方向一致性权重；0=关闭滞后
   double subgoal_clearance  = 0.3;      // 截断时子目标与膨胀带边缘的净空 m；0=复现旧行为
   double goal_clear_radius  = 0.0;      // 终点清洞半径 m；0=关闭（终点贴墙场景才需要）
@@ -240,7 +240,7 @@ struct NavParams {
   // 集成层直接 params.pursuit_lookahead 构造控制器，不再单独走参数服务器。
   double pursuit_lookahead = 0.5;  // 纯跟踪前视距离 m：调小贴线紧但抖，调大平滑但切内角深
 
-  // 控制环与规划环解耦：/cmd_vel 按 control_freq 发，子目标 + A* 按 plan_freq 跑。
+  // 控制环与规划环解耦：/cmd_vel 按 control_freq 发，子目标 + 直线路径按 plan_freq 跑。
   // 两环同频时，车在一个周期内已经走了 v/freq（1.5m/s @ 10Hz = 15cm）才被重新指令
   // 一次，纯跟踪等效滞后 7~15cm —— 这就是「跟不紧」的主要来源，与规划质量无关。
   // 硬前提：高频控制必须拿到车在「规划时刻栅格系」下的当前位姿（见 compute() 的 car
@@ -298,7 +298,7 @@ struct NavResult {
   NavState state = NavState::IDLE;
   bool emergency_stop = true;
   Point2D subgoal;                 // 本周期实际使用的子目标（车体系），调试用
-  bool subgoal_reachable = false;  // 子目标是否被 A* 搜到
+  bool subgoal_reachable = false;  // 是否生成了通往子目标的路径（当前为直线路径）
   Point2D goal_base;               // 终点在车体系的位置（调试/可视化用），无效时={0,0}
   bool goal_base_valid = false;    // goal_base 是否有效
   std::string reason = "init";     // 调试说明

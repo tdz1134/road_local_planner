@@ -7,7 +7,6 @@
 
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
-#include "unk_nav/path_smooth.h"
 #include "unk_nav/road_follow.h"
 #include "unk_nav/speed_planner.h"
 #include "unk_nav/subgoal.h"
@@ -64,7 +63,8 @@ NavResult NavCore::plan(const NavInput& in) {
   }
 
   // ---- 2) 栅格预处理：膨胀 + 车体足迹清洞 ----
-  // 顺序不可颠倒：先膨胀再清洞，否则膨胀层会把车自己埋进障碍，A* 起点即死锁。
+  // 顺序不可颠倒：先膨胀再清洞，否则膨胀层会把车自己埋进障碍，车脚格被误判为
+  // 不可行（射线自由距离与限速复查都会被糊弄）。
   // 传 raw：足迹洞只抹掉「膨胀出来的」格，lidar 真打到的墙保持 occupied。
   // 否则车贴墙到 footprint_clear_radius 以内时近场被抹平，规划器以为脚下是空地
   // （膨胀带与弦碰撞检测全部失效）。车中心格在 raw 里必为 free/unknown，仍被清成
@@ -78,7 +78,7 @@ NavResult NavCore::plan(const NavInput& in) {
   }
 
   // ---- 3) 子目标：沿路模式从道路走廊几何取，终点模式从全局终点投影取 ----
-  // 两种来源产出同一个「窗口内车体系子目标」，下游 A*/平滑/限速完全共用。
+  // 两种来源产出同一个「窗口内车体系子目标」，下游直线路径/限速完全共用。
   subgoal::Result sg;
   if (p_.follow_road) {
     // 无定位：不读 in.goal / in.vehicle_pose，前进方向以车头（base 系 +x）为基准。

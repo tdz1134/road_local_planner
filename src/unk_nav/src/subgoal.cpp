@@ -78,8 +78,8 @@ Result project(const GridMap& grid, const Point2D& goal_base, const NavParams& p
   const double ux_center = goal_base.x / r.goal_dist;
   const double uy_center = goal_base.y / r.goal_dist;
 
-  // 窗口内缩两个格：子目标落在最外圈格上时，A* 的邻域扩展会大量越界，
-  // 且螺旋吸附可能把它推到窗口外，白白浪费一个周期。
+  // 窗口内缩两个格：子目标落在最外圈格上时会贴着栅格边界，可行性与自由距离的
+  // 逐点判处在边界上易出错，白白浪费一个周期。
   const double m = 2.0 * grid.resolution;
   const double xmin = grid.origin_x + m;
   const double ymin = grid.origin_y + m;

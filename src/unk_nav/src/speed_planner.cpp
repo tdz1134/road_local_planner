@@ -41,8 +41,8 @@ Result limit(const Path& path, const GridMap& grid, double current_speed,
   // ---- 1) 路径上第一个阻挡点的弧长 ----
   // 必须沿路径**稠密**采样，不能只查顶点：顶点稀疏时会整段跨过薄障碍，
   // 把 d_obs 误判成 inf，制动包络随之失效。
-  // A* 是在同一份膨胀栅格上搜的，正常情况全程无阻挡；这里仍复查，因为下游
-  // 可能拿到跨周期的旧路径，或栅格在规划中途被更新。
+  // 子目标落点按构造是射线自由距离（含净空回退），正常情况全程无阻挡；这里仍
+  // 复查一次，因为下游可能拿到跨周期的旧路径，或栅格在规划中途被更新。
   const double sample_step = std::max(grid.resolution, kEps);
   for (size_t i = 1; i < path.size(); ++i) {
     if (grid.blockedAt(path[i - 1].p.x, path[i - 1].p.y)) {
