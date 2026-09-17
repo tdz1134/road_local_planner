@@ -1267,13 +1267,13 @@ void testParamsIo() {
   {
     std::ofstream f(path);
     f << "# 注释行\n\n"
-      << "v_max: 1.5\nw_max: 2.5\nsmooth_laplacian_iters: 5\n"
+      << "v_max: 1.5\nw_max: 2.5\nrecovery_max_retry: 5\n"
       << "inflate_unknown: true\npursuit_lookahead: 0.9\n";
   }
   unk::NavParams p;
   check(unk::loadNavParams(path, &p, &err), "正常加载");
   checkNear(p.v_max, 1.5, 1e-12, "double 读入");
-  check(p.smooth_laplacian_iters == 5, "int 读入");
+  check(p.recovery_max_retry == 5, "int 读入");
   check(p.inflate_unknown == true, "bool 读入");
   checkNear(p.pursuit_lookahead, 0.9, 1e-12, "控制器参数同表读入");
   checkNear(p.sensor_range, unk::NavParams().sensor_range, 1e-12, "未写字段保持默认");
@@ -1290,7 +1290,7 @@ void testParamsIo() {
   // 类型不可转换 → 拒绝
   {
     std::ofstream f(path);
-    f << "smooth_laplacian_iters: abc\n";
+    f << "recovery_max_retry: abc\n";
   }
   check(!unk::loadNavParams(path, &q, &err), "类型错误：拒绝加载");
 

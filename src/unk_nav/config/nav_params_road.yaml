@@ -88,12 +88,6 @@ t_reaction: 0.1
 kappa_max: 0.0
 dk_max: 50.0
 
-# ── 路径平滑 ──
-smooth_corner_speed: 0.22
-smooth_laplacian_iters: 2
-smooth_laplacian_lambda: 0.2
-smooth_shrink_retry: 3
-
 # ── 卡死 / 脱困（沿路模式：前进位移棘轮 ∫v·dt + 规划连续失败）──
 stuck_time: 5.0             # 判定时长 s
 stuck_dist: 0.1             # 前进推进阈值 m（< v_max×stuck_time = 7.5m，余量充足）

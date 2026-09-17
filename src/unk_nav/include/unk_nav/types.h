@@ -217,16 +217,6 @@ struct NavParams {
   double kappa_max = 0.0;   // 最大曲率 1/m，0 = 不启用硬门限
   double dk_max = 50.0;     // 最大曲率变化率 1/(m*s)
 
-  // ---- 路径平滑 ----
-  // 倒角半径不直接给，而是由「目标过弯速度」反解：
-  //   r = max(v_corner / w_max, v_corner^2 / a_lat_max)
-  // 同时满足角速度与横向加速度两条约束，换车型时只需给出想要的过弯速度。
-  // 注意这是**动力学参数，不随 sensor_range 缩放**（换雷达不该改变过弯半径）。
-  double smooth_corner_speed = 0.22;  // 目标过弯速度 m/s；0 = 关闭倒角
-  int smooth_laplacian_iters = 2;     // 拉普拉斯松弛迭代次数；0 = 关闭
-  double smooth_laplacian_lambda = 0.2;  // 松弛系数 (0,1)
-  int smooth_shrink_retry = 3;        // 倒角圆弧碰撞时半径折半重试次数
-
   // ---- 无进展 / 卡死判定 ----
   // 两个触发源：规划连续失败（checkPlanFail）、规划成功但没能朝终点推进（checkStuck）。
   // 判的是「推进量」而非「位移量」：车在凹槽里横向来回振荡时位移不小但零进展，
@@ -321,9 +311,9 @@ struct NavResult {
   bool subgoal_reachable = false;  // 是否生成了通往子目标的路径（当前为直线路径）
   Point2D goal_base;               // 终点在车体系的位置（调试/可视化用），无效时={0,0}
   bool goal_base_valid = false;    // goal_base 是否有效
-  double kappa_est = 0.0;          // 链式前瞻估计的前方曲率 1/m（EMA 后，左正右负；仅沿路模式非零）
+  double kappa_est = 0.0;          // 链式前瞻估计的前方曲率 1/m（EMA 后，左正右负；chain 有效时非零）
 
-  // ── 链式前瞻 / 曲线拟合可视化（仅沿路模式且 curve_fit_enable 时有值，调试用）──
+  // ── 链式前瞻 / 曲线拟合可视化（chain 有效时填充，调试用）──
   Point2D chain_hops[16];          // 样条控制跳点（不含原点），车体系：chain_hops[0]=P1、[1]=P2…
   int chain_hop_count = 0;         // 总跳数（含第一跳）0..16
   bool curve_used = false;         // 本帧是否真用了 Catmull-Rom 样条（false=直线或碰撞回退）

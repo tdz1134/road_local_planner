@@ -19,8 +19,6 @@
 # 绿线终点扎进膨胀带    → 看 /unk_nav/state 有无 subgoal_trunc（有=正常截断）；
 #                        持续截断不前进 → inflation_radius↓ 或 goal_snap_dist↑
 # 不绕障碍、直冲墙      → lookahead_ratio↑（看更远，但也更慢反应）
-# 路径抖动/拐角切内角   → pursuit_lookahead↑、smooth_laplacian_iters↓
-# 过弯太慢             → smooth_corner_speed↑、a_lat_max↑
 # 刹车顿挫/急停频繁     → safety_margin↑（更早减速）、a_decel_max↓、t_reaction↑
 # 到点不停/停太偏       → goal_tolerance↓
 # 跟踪不紧/车身拖在弯外  → control_freq↑（控制环与规划环解耦）、w_max↑
@@ -104,14 +102,6 @@ t_reaction: 0.1             # 反应时间 s：包络先扣 v×t_reaction 再算
 kappa_max: 0.0              # 最大曲率硬门限 1/m，0=关闭。差速底盘能原地转，默认关；
                             # 只有阿克曼底盘或禁止原地打方向的平台才设正值
 dk_max: 50.0                # 最大曲率变化率 1/(m·s)：限制沿路径的打舵速度，调小=拐弯更缓
-
-# ── 路径平滑（A* 栅格折线 → 可跟踪曲线）──
-smooth_corner_speed: 0.22   # 目标过弯速度 m/s，倒角半径由它反解
-                            # r = max(v/w_max, v²/a_lat_max)。调大=弯更平缓但半径大、
-                            # 窄位可能贴障碍；0=关闭倒角
-smooth_laplacian_iters: 2   # 拉普拉斯松弛迭代次数，0=关闭。调大=更平滑但可能收缩进障碍
-smooth_laplacian_lambda: 0.2  # 松弛系数 (0,1)，每次迭代向邻点平均移动的比例
-smooth_shrink_retry: 3      # 倒角圆弧撞碰撞时半径折半重试次数（防平滑后反而不可行）
 
 # ── 卡死 / 脱困（判"推进量"不判"位移量"：振荡零进展也能抓住）──
 stuck_time: 5.0             # 判定时长 s：这么久内朝终点推进 < stuck_dist → RECOVERY

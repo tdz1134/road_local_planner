@@ -13,6 +13,8 @@
 
 namespace unk {
 
+namespace road { struct Result; }  // forward decl
+
 class NavCore {
  public:
   explicit NavCore(const NavParams& p);
@@ -34,6 +36,12 @@ class NavCore {
   // 终点变化检测：换终点时通知状态机清终态
   void detectGoalChange(const NavInput& in);
 
+  // 从 road::Result 提取链式跳点 + kappa EMA 更新（沿路/终点两种模式共用）
+  void absorbChain(const road::Result& rr);
+
+  // 直线保底路径：车→子目标，k=0
+  static Path makeStraightPath(const Point2D& target, double spacing);
+
   NavParams p_;
   fsm::BehaviorFsm fsm_;
   GridMap work_grid_;
@@ -46,11 +54,15 @@ class NavCore {
   double last_subgoal_bearing_ = 0.0;
   bool   have_last_bearing_ = false;
 
-  // 链式前瞻曲率 κ 的跨帧 EMA 滤波（沿路模式）：扇形 3° 量化让 κ 逐帧抖动，一阶低通压噪。
+  // 链式前瞻曲率 κ 的跨帧 EMA 滤波：扇形 3° 量化让 κ 逐帧抖动，一阶低通压噪。
   // 链截断（hop_count<2）或子目标无效时作废 → 本帧走直线。
   // 拟合切向不再单独滤波：曲线由 fitSpline 直接过 hops 各跳点，切向来自相邻点差分。
   double kappa_ema_ = 0.0;
   bool   chain_filter_valid_ = false;
+
+  // 链式跳点（本帧）：absorbChain 填入，路径生成和输出组装读取。
+  Point2D chain_hops_[16];
+  int     chain_hop_count_ = 0;
 };
 
 }  // namespace unk

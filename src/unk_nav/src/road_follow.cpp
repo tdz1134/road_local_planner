@@ -104,34 +104,26 @@ ScanHit scanFan(const GridMap& g, double ox, double oy, double heading,
 // ── 公共接口（在 road_follow.h 中声明）───────────────────────────
 
 Result lookAhead(const GridMap& work_grid, const NavParams& p) {
+  // 单跳扫描：子目标 = 看多深 L 的满距离落点（不受 road_step_ratio 截断）。
+  // 与 lookAheadChain 的区别：不截断第一跳距离、不做接力扫描。
+  // 保留独立实现（而非委托 lookAheadChain）：lookAheadChain 会用 step_walk 截断第一跳，
+  // 而 lookAhead 的语义是"扫满 L、落点在射线末端"，两者在 road_step_ratio<1 时不同。
   Result r;
   if (work_grid.empty()) return r;
 
   const double L = p.roadLookahead();
   if (L <= 1e-6) return r;
-
-  // 射线采样步长：半格。与 subgoal 的落点截断同尺度，足够命中边界且不超一格误差。
   const double step = std::max(0.5 * work_grid.resolution, 1e-6);
 
   const ScanHit hit = scanFan(work_grid, 0.0, 0.0, 0.0, p, L, step, &r.candidates);
   if (!hit.found) return r;
 
-  r.bearing = hit.rel_bearing;  // heading=0：相对角即绝对角
+  r.bearing = hit.rel_bearing;
   r.reach = hit.reach;
-
-  // 选中方向连一格可行落点都没有（车被走廊尽头/障碍围死）→ 无前向可走。
-  // 交由上层：nav_core 得不到子目标 → checkPlanFail → RECOVERY → ABORT。
-  if (r.reach < step) {
-    r.reach = 0.0;
-    return r;  // valid 保持 false
-  }
-
-  // 落点已在射线行进中保证可行（d 是首个不可行点之前最后一格），无需再回退。
-  // reach < L 说明射线被障碍/膨胀带截短 → 标记 truncated_by_obstacle（与 subgoal 语义一致）。
+  if (r.reach < step) { r.reach = 0.0; return r; }
   r.truncated_by_obstacle = r.reach < L - 1e-9;
   r.point = Point2D{std::cos(r.bearing) * r.reach, std::sin(r.bearing) * r.reach};
   r.valid = true;
-  // 单跳退化默认值：无切向修正信息（切向 = 弦向），曲率未知
   r.tangent_end = r.bearing;
   r.kappa_est = 0.0;
   r.hops[0] = r.point;

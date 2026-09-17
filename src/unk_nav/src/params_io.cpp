@@ -58,11 +58,6 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"t_reaction", kDouble, &p->t_reaction},
       {"kappa_max", kDouble, &p->kappa_max},
       {"dk_max", kDouble, &p->dk_max},
-      // 路径平滑
-      {"smooth_corner_speed", kDouble, &p->smooth_corner_speed},
-      {"smooth_laplacian_iters", kInt, &p->smooth_laplacian_iters},
-      {"smooth_laplacian_lambda", kDouble, &p->smooth_laplacian_lambda},
-      {"smooth_shrink_retry", kInt, &p->smooth_shrink_retry},
       // 卡死 / 脱困
       {"stuck_time", kDouble, &p->stuck_time},
       {"stuck_dist", kDouble, &p->stuck_dist},
@@ -79,7 +74,7 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"road_lookahead_ratio", kDouble, &p->road_lookahead_ratio},
       {"road_free_w", kDouble, &p->road_free_w},
       {"road_align_w", kDouble, &p->road_align_w},
-      // 链式前瞻 + 曲线拟合（沿路模式专用）
+      // 链式前瞻 + 曲线拟合（两种模式共用）
       {"chain_hops", kInt, &p->chain_hops},
       {"road_step_dist", kDouble, &p->road_step_dist},
       {"road_step_ratio", kDouble, &p->road_step_ratio},
