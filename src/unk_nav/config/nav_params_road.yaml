@@ -65,6 +65,18 @@ road_free_w: 2.0            # 打分权重：前方自由距离（越空越想�
 road_align_w: 1.0           # 打分权重：车头对齐 cosθ（越想直行 → 抑制无谓摆动）。
                             # 直路抖 → align_w↑；跟弯迟钝/切内墙 → free_w↑ 或 align_w↓
 
+# ── 链式前瞻 + 曲线拟合（两种模式共用；沿路模式的核心增强）──
+# "看多深"(road_lookahead_ratio×sensor_range) 只用来扇形选方向防短视；
+# "走多近"决定每跳落点沿选中方向前进多少 → 跳点 P1/P2/… 串成 Catmull-Rom 样条控制点。
+# κ 经曲线路径 k 字段唤醒弯道限速；样条让路径跟弯，碰撞复查失败自动回退直线。
+# 沿路模式 goal_align_w=0（不需终点偏向）；终点模式见 nav_params.yaml。
+chain_hops: 4               # 点数（曲线穿多远 = 跳数 × 走多近）；范围 1..16，1=退化单跳走直线
+road_step_dist: 1.5         # 走多近·固定米 m：每跳落点沿选中方向最多前进 1.5m
+road_step_ratio: 0.3        # 走多近·比例：× 看多深。实际走多近 = min(1.5, 0.3×看多深)，遇墙再提前停
+chain_ema_alpha: 0.3        # κ 跨帧 EMA (0,1]；直路抖 → 调小；跟弯滞后 → 调大
+goal_align_w: 0.0           # 终点模式链式打分偏向子目标；沿路模式=0（不需要终点偏向）
+curve_fit_enable: true      # false=完全恢复直线路径（对照实验用）
+
 # ── A* 搜索（astar.h/cpp 保留，但 nav_core 不再调用；unknown_cost / obstacle_cost_* 保留供 astar 单测）──
 unknown_cost: 1.4
 obstacle_cost_k: 1.0        # 障碍距离软代价：把路径推向走廊中央、离两侧墙更远（沿路居中的关键）

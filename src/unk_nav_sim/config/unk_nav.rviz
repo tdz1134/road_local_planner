@@ -78,19 +78,19 @@ Visualization Manager:
     - Alpha: 1
       Buffer Length: 1
       Class: rviz/Path
-      Color: 0; 255; 0
+      Color: 255; 50; 50
       Enabled: true
       Head Diameter: 0.1
       Head Length: 0.05
       Length: 0.2
       Line Style: Lines
-      Line Width: 0.03
+      Line Width: 0.08
       Name: PlanPath
       Offset:
         X: 0
         Y: 0
         Z: 0.15
-      Pose Color: 0; 255; 0
+      Pose Color: 255; 50; 50
       Queue Size: 10
       Shape: Arrows
       Stem Length: 0.05
@@ -132,6 +132,15 @@ Visualization Manager:
       Enabled: true
       Name: Goal
       Marker Topic: /unk_nav/goal_marker
+      Queue Size: 1
+      Value: true
+
+    # 链式前瞻可视化（MarkerArray：接力折线 + 跳点 + 终点切向箭头 + κ/curve 文本）
+    # 仅沿路模式且 curve_fit_enable=true 时有内容，直观展示链式前瞻与曲线拟合效果
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Name: Chain
+      Marker Topic: /unk_nav/chain
       Queue Size: 1
       Value: true
 

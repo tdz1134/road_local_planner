@@ -45,6 +45,7 @@
 #include <geometry_msgs/Twist.h>
 #include <std_msgs/String.h>
 #include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/utils.h>
 
@@ -55,7 +56,9 @@
 #include "unk_nav/types.h"
 
 #include <cmath>
+#include <cstdio>
 #include <string>
+#include <vector>
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 导航节点主体（纯 ROS 接口壳，不含算法）
@@ -111,6 +114,8 @@ public:
         nh.advertise<visualization_msgs::Marker>("/unk_nav/fan_candidates", 1);
     pub_goal_ =
         nh.advertise<visualization_msgs::Marker>("/unk_nav/goal_marker", 1);
+    pub_chain_ =
+        nh.advertise<visualization_msgs::MarkerArray>("/unk_nav/chain", 1);
 
     // ── 规划定时器 ──
     timer_ = nh.createTimer(ros::Duration(1.0 / params_.plan_freq), &NavNode::planCb, this);
@@ -215,6 +220,9 @@ private:
 
     // ── 7. 发布终点 Marker（base_link 系绿色圆柱）──
     publishGoalMarker(result);
+
+    // ── 8. 发布链式前瞻可视化（接力折线 + 跳点 + 终点切向 + κ 文本）──
+    publishChain(result);
 
     // 调试日志（1Hz 节流）
     ROS_INFO_THROTTLE(1.0,
@@ -365,7 +373,8 @@ private:
 
   // ROS
   ros::Subscriber sub_odom_, sub_grid_, sub_goal_;
-  ros::Publisher pub_cmd_, pub_path_, pub_state_, pub_work_grid_, pub_fan_, pub_goal_;
+  ros::Publisher pub_cmd_, pub_path_, pub_state_, pub_work_grid_, pub_fan_, pub_goal_,
+      pub_chain_;
   ros::Timer timer_, ctrl_timer_;
 
   // ── 发布扇形候选可视化 ──
@@ -436,6 +445,128 @@ private:
       m.action = visualization_msgs::Marker::DELETE;
     }
     pub_goal_.publish(m);
+  }
+
+  // ── 发布链式前瞻可视化（base_link 系，MarkerArray）──
+  // 原点→P1→P2→P3 接力折线（黄，即样条控制骨架）+ 各跳点球（P1 绿、后续黄）+ 最远跳
+  // 点出射方向箭头（青）+ κ/curve 状态文本。直观看出"接力看了几跳、路往哪弯"。
+  // 仅沿路模式且 curve_fit_enable 时 chain_hop_count>0；否则发 DELETE 清屏。
+  void publishChain(const unk::NavResult& result) {
+    visualization_msgs::MarkerArray arr;
+    const ros::Time t = ros::Time::now();
+
+    // 无链（终点模式 / curve_fit 关闭 / 无有效跳点）→ 逐个 DELETE 清掉上一帧
+    if (result.chain_hop_count <= 0) {
+      for (int id = 0; id < 4; ++id) {
+        visualization_msgs::Marker d;
+        d.header.frame_id = "base_link";
+        d.header.stamp = t;
+        d.ns = "chain";
+        d.id = id;
+        d.action = visualization_msgs::Marker::DELETE;
+        arr.markers.push_back(d);
+      }
+      pub_chain_.publish(arr);
+      return;
+    }
+
+    // 折线顶点：原点(0,0) → 各跳点
+    std::vector<geometry_msgs::Point> pts;
+    geometry_msgs::Point o;
+    o.x = 0.0; o.y = 0.0; o.z = 0.10;
+    pts.push_back(o);
+    for (int i = 0; i < result.chain_hop_count; ++i) {
+      geometry_msgs::Point p;
+      p.x = result.chain_hops[i].x;
+      p.y = result.chain_hops[i].y;
+      p.z = 0.10;
+      pts.push_back(p);
+    }
+
+    // (id=0) 接力折线 LINE_STRIP（黄）
+    visualization_msgs::Marker line;
+    line.header.frame_id = "base_link";
+    line.header.stamp = t;
+    line.ns = "chain";
+    line.id = 0;
+    line.type = visualization_msgs::Marker::LINE_STRIP;
+    line.action = visualization_msgs::Marker::ADD;
+    line.pose.orientation.w = 1.0;
+    line.scale.x = 0.04;
+    line.color.r = 1.0; line.color.g = 0.8; line.color.b = 0.0; line.color.a = 0.9;
+    line.points = pts;
+    arr.markers.push_back(line);
+
+    // (id=1) 跳点球 SPHERE_LIST（P1 绿，后续黄）
+    visualization_msgs::Marker spheres;
+    spheres.header.frame_id = "base_link";
+    spheres.header.stamp = t;
+    spheres.ns = "chain";
+    spheres.id = 1;
+    spheres.type = visualization_msgs::Marker::SPHERE_LIST;
+    spheres.action = visualization_msgs::Marker::ADD;
+    spheres.pose.orientation.w = 1.0;
+    spheres.scale.x = spheres.scale.y = spheres.scale.z = 0.22;
+    for (size_t i = 1; i < pts.size(); ++i) {  // 跳过原点
+      spheres.points.push_back(pts[i]);
+      std_msgs::ColorRGBA c;
+      if (i == 1) { c.r = 0.0; c.g = 1.0; c.b = 0.0; c.a = 0.95; }  // P1 绿
+      else        { c.r = 1.0; c.g = 0.8; c.b = 0.0; c.a = 0.90; }  // 后续黄
+      spheres.colors.push_back(c);
+    }
+    arr.markers.push_back(spheres);
+
+    // (id=2) 样条终点出射方向箭头（青）——从最远跳点沿末段 hops 方向，仅当有第二跳
+    visualization_msgs::Marker arrow;
+    arrow.header.frame_id = "base_link";
+    arrow.header.stamp = t;
+    arrow.ns = "chain";
+    arrow.id = 2;
+    arrow.type = visualization_msgs::Marker::ARROW;
+    arrow.pose.orientation.w = 1.0;
+    arrow.scale.x = 0.05;  // 杆径
+    arrow.scale.y = 0.12;  // 头径
+    arrow.scale.z = 0.12;  // 头长
+    arrow.color.r = 0.0; arrow.color.g = 1.0; arrow.color.b = 1.0; arrow.color.a = 0.95;
+    if (result.chain_hop_count >= 2) {
+      const unk::Point2D& pend = result.chain_hops[result.chain_hop_count - 1];
+      const unk::Point2D& pprev = result.chain_hops[result.chain_hop_count - 2];
+      const double th = std::atan2(pend.y - pprev.y, pend.x - pprev.x);
+      const double L = 0.8;  // 箭头长度
+      geometry_msgs::Point a, b;
+      a.x = pend.x; a.y = pend.y; a.z = 0.12;
+      b.x = pend.x + L * std::cos(th);
+      b.y = pend.y + L * std::sin(th);
+      b.z = 0.12;
+      arrow.points.push_back(a);
+      arrow.points.push_back(b);
+      arrow.action = visualization_msgs::Marker::ADD;
+    } else {
+      arrow.action = visualization_msgs::Marker::DELETE;
+    }
+    arr.markers.push_back(arrow);
+
+    // (id=3) κ / curve 状态文本（P1 上方）
+    visualization_msgs::Marker txt;
+    txt.header.frame_id = "base_link";
+    txt.header.stamp = t;
+    txt.ns = "chain";
+    txt.id = 3;
+    txt.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    txt.action = visualization_msgs::Marker::ADD;
+    txt.pose.orientation.w = 1.0;
+    txt.pose.position.x = result.chain_hops[0].x;
+    txt.pose.position.y = result.chain_hops[0].y;
+    txt.pose.position.z = 0.6;
+    txt.scale.z = 0.3;  // 字高
+    txt.color.r = 1.0; txt.color.g = 1.0; txt.color.b = 1.0; txt.color.a = 0.95;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "kappa=%.3f\n%s", result.kappa_est,
+                  result.curve_used ? "curve" : "line");
+    txt.text = buf;
+    arr.markers.push_back(txt);
+
+    pub_chain_.publish(arr);
   }
 };
 

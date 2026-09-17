@@ -2,9 +2,10 @@
 // 门面：单周期总调度。外部只需要认识 NavCore + NavInput + NavResult 三个东西。
 //
 // 每周期内部流程：
-//   终点转车体系 → 栅格膨胀 + 足迹清洞 → 子目标投影 → 直线路径 → 速度规划 → 行为状态机
+//   终点转车体系 → 栅格膨胀 + 足迹清洞 → 子目标投影 → 路径生成（沿路曲线/直线）
+//   → 速度规划 → 行为状态机
 //
-// 跨周期状态只有两处：BehaviorFsm 的记忆，以及上一帧结果（调试用）。
+// 跨周期状态：BehaviorFsm 的记忆、子目标方向滞后、链式前瞻 EMA 滤波、上一帧结果（调试用）。
 #include <string>
 
 #include "unk_nav/behavior_fsm.h"
@@ -44,6 +45,12 @@ class NavCore {
   // 子目标方向滞后（防翻烧饼）：存上帧选中的子目标方位角，传给 subgoal::project 作为打分参考。
   double last_subgoal_bearing_ = 0.0;
   bool   have_last_bearing_ = false;
+
+  // 链式前瞻曲率 κ 的跨帧 EMA 滤波（沿路模式）：扇形 3° 量化让 κ 逐帧抖动，一阶低通压噪。
+  // 链截断（hop_count<2）或子目标无效时作废 → 本帧走直线。
+  // 拟合切向不再单独滤波：曲线由 fitSpline 直接过 hops 各跳点，切向来自相邻点差分。
+  double kappa_ema_ = 0.0;
+  bool   chain_filter_valid_ = false;
 };
 
 }  // namespace unk

@@ -4,7 +4,9 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <vector>
 
+#include "unk_nav/curve_fit.h"
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/road_follow.h"
@@ -24,6 +26,8 @@ void NavCore::reset() {
   last_goal_ = Point2D();
   last_ = NavResult();
   have_last_bearing_ = false;
+  kappa_ema_ = 0.0;
+  chain_filter_valid_ = false;
 }
 
 void NavCore::setParams(const NavParams& p) {
@@ -80,38 +84,99 @@ NavResult NavCore::plan(const NavInput& in) {
   // ---- 3) 子目标：沿路模式从道路走廊几何取，终点模式从全局终点投影取 ----
   // 两种来源产出同一个「窗口内车体系子目标」，下游直线路径/限速完全共用。
   subgoal::Result sg;
+  // 链式跳点暂存（rr 作用域在下面的 if 内，需提到函数级才能组装样条控制点 / 写进 NavResult）
+  Point2D chain_hops[16];
+  int chain_hop_count = 0;
   if (p_.follow_road) {
     // 无定位：不读 in.goal / in.vehicle_pose，前进方向以车头（base 系 +x）为基准。
     if (!work_grid_.empty()) {
-      road::Result rr = road::lookAhead(work_grid_, p_);
+      // 链式前瞻：第 1 跳与单跳完全一致，额外量出落点切向与前方曲率；
+      // 曲线拟合关闭时不做链（省算力，行为与旧版逐字节一致）。
+      road::Result rr = p_.curve_fit_enable ? road::lookAheadChain(work_grid_, p_)
+                                            : road::lookAhead(work_grid_, p_);
       sg.valid = rr.valid;
       sg.point = rr.point;
       sg.reach = rr.reach;
+      sg.bearing = rr.bearing;
       sg.truncated_by_obstacle = rr.truncated_by_obstacle;
       sg.candidates = std::move(rr.candidates);  // 扇形候选（调试可视化）
       if (rr.valid) {
         goal_dist = std::hypot(rr.point.x, rr.point.y);  // 仅调试/可视化用
         goal_bearing = rr.bearing;
+        // 链式跳点透传给 NavResult（可视化：原点→P1→P2→P3 接力折线）
+        chain_hop_count = std::min(rr.hop_count, 16);
+        for (int i = 0; i < chain_hop_count; ++i) chain_hops[i] = rr.hops[i];
+        // 曲率 κ 跨帧 EMA（纯诊断 / 状态文本用）；链截断（<2 跳）作废。
+        if (rr.hop_count >= 2) {
+          const double alpha = std::min(std::max(p_.chain_ema_alpha, 1e-3), 1.0);
+          if (chain_filter_valid_) {
+            kappa_ema_ += alpha * (rr.kappa_est - kappa_ema_);
+          } else {
+            kappa_ema_ = rr.kappa_est;
+            chain_filter_valid_ = true;
+          }
+        } else {
+          chain_filter_valid_ = false;  // 链截断 → 滤波作废，本帧走直线
+        }
+      } else {
+        chain_filter_valid_ = false;
       }
     }
   } else if (in.goal_valid && !work_grid_.empty()) {
     sg = subgoal::project(work_grid_, goal_base, p_,
                           have_last_bearing_ ? &last_subgoal_bearing_ : nullptr);
+    // 终点模式链式前瞻：用 goal_bearing 偏向子目标方向，得到跳点供样条拟合。
+    // goal_align_w=0 时打分无偏向（沿路默认），>0 时射线越朝子目标打分越高。
+    if (sg.valid && p_.curve_fit_enable) {
+      road::Result rr = road::lookAheadChain(work_grid_, p_, 0.0, goal_bearing);
+      if (rr.valid) {
+        chain_hop_count = std::min(rr.hop_count, 16);
+        for (int i = 0; i < chain_hop_count; ++i) chain_hops[i] = rr.hops[i];
+        if (rr.hop_count >= 2) {
+          const double alpha = std::min(std::max(p_.chain_ema_alpha, 1e-3), 1.0);
+          if (chain_filter_valid_) {
+            kappa_ema_ += alpha * (rr.kappa_est - kappa_ema_);
+          } else {
+            kappa_ema_ = rr.kappa_est;
+            chain_filter_valid_ = true;
+          }
+        } else {
+          chain_filter_valid_ = false;
+        }
+      } else {
+        chain_filter_valid_ = false;
+      }
+    }
   }
 
-  // ---- 4) 直线路径（车→子目标）----
+  // ---- 4) 路径生成：条件满足时 Catmull-Rom 样条，否则直线（车→子目标）----
+  // 两种模式共用样条：沿路模式跳点来自走廊几何；终点模式跳点带 goal_align_w 偏向子目标。
+  // 直线是构造性保底（落点在自由射线上）；曲线鼓包可能扫进膨胀区，
+  // 拟合内部已做碰撞复查，失败自动回退直线。
   Path path;
+  bool curve_used = false;
   if (sg.valid) {
-    const double dx = sg.point.x, dy = sg.point.y;
-    const double len = std::hypot(dx, dy);
-    const int n = std::max(1, static_cast<int>(std::ceil(len / p_.path_spacing)));
-    for (int i = 0; i <= n; ++i) {
-      const double t = static_cast<double>(i) / n;
-      PathPoint nd;
-      nd.p = Point2D{dx * t, dy * t};
-      nd.s = len * t;
-      nd.k = 0.0;  // 直线曲率 0
-      path.push_back(nd);
+    if (p_.curve_fit_enable && chain_filter_valid_) {
+      // Catmull-Rom 样条：曲线经过 车位O → 各跳跳点 P1→P2(→P3)，切向由相邻跳点差分自动定。
+      std::vector<Point2D> ctrl;
+      ctrl.reserve(static_cast<size_t>(chain_hop_count) + 1);
+      ctrl.push_back(Point2D{0.0, 0.0});
+      for (int i = 0; i < chain_hop_count; ++i) ctrl.push_back(chain_hops[i]);
+      curve_used = curve::fitSpline(work_grid_, ctrl, 0.0, p_.path_spacing,
+                                    p_.curvature_baseline, &path);
+    }
+    if (!curve_used) {
+      const double dx = sg.point.x, dy = sg.point.y;
+      const double len = std::hypot(dx, dy);
+      const int n = std::max(1, static_cast<int>(std::ceil(len / p_.path_spacing)));
+      for (int i = 0; i <= n; ++i) {
+        const double t = static_cast<double>(i) / n;
+        PathPoint nd;
+        nd.p = Point2D{dx * t, dy * t};
+        nd.s = len * t;
+        nd.k = 0.0;  // 直线曲率 0
+        path.push_back(nd);
+      }
     }
   }
 
@@ -152,6 +217,11 @@ NavResult NavCore::plan(const NavInput& in) {
   r.fan_candidates = std::move(sg.candidates);  // 扇形候选（调试可视化）
   r.goal_base = goal_base;
   r.goal_base_valid = in.goal_valid;
+  r.kappa_est = chain_filter_valid_ ? kappa_ema_ : 0.0;
+  // 链式前瞻可视化透传（两种模式均可产生跳点；hop_count=0 时 nav_node 不画链）
+  r.chain_hop_count = chain_hop_count;
+  for (int i = 0; i < chain_hop_count; ++i) r.chain_hops[i] = chain_hops[i];
+  r.curve_used = curve_used;
 
   std::ostringstream oss;
   oss << navStateName(st) << "/" << fsm_.detail();
@@ -160,6 +230,10 @@ NavResult NavCore::plan(const NavInput& in) {
   // 在 /unk_nav/state 里可见，方便区分「正常前进」和「贴带缓行」。
   if (sg.truncated_by_obstacle) oss << " subgoal_trunc";
   if (sg.fan_used) oss << " subgoal_fan";
+  if (curve_used) oss << " curve";
+  if (chain_filter_valid_) {
+    oss << " kappa=" << static_cast<int>(kappa_ema_ * 1000.0) / 1000.0;
+  }
 
   // 终态与无效输入：一律停车，且不输出路径（下游不该去跟踪一条通往已结束任务的路）
   if (st == NavState::IDLE || st == NavState::ARRIVED || st == NavState::ABORT) {

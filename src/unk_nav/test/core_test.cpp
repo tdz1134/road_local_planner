@@ -18,6 +18,7 @@
 #include "unk_nav/astar.h"
 #include "unk_nav/behavior_fsm.h"
 #include "unk_nav/controller.h"
+#include "unk_nav/curve_fit.h"
 #include "unk_nav/geom_util.h"
 #include "unk_nav/grid_util.h"
 #include "unk_nav/nav_core.h"
@@ -569,6 +570,204 @@ void testRoadFollow() {
   check(!unk::road::lookAhead(unk::GridMap(), p).valid, "空栅格：返回无效");
 }
 
+// ── 链式前瞻 + Hermite 曲线拟合 ─────────────────────────────────
+
+// 抛物线弯道走廊：中线 y = x²/(2R)（x≥0；R>0 左弯，R<0 右弯），走廊半宽 cw；
+// x<0 段保持直线（中线 y=0）。构造「连续常曲率」道路，κ_true = 1/R。
+unk::GridMap makeArcCorridor(double W, double res, double R, double cw) {
+  unk::GridMap g = makeGrid(W, res, unk::kOccupied);
+  for (int gy = 0; gy < g.height; ++gy) {
+    for (int gx = 0; gx < g.width; ++gx) {
+      double wx = 0.0, wy = 0.0;
+      g.gridToWorld(gx, gy, &wx, &wy);
+      const double c = (wx >= 0.0) ? wx * wx / (2.0 * R) : 0.0;
+      if (std::fabs(wy - c) <= cw) setCell(&g, gx, gy, unk::kFree);
+    }
+  }
+  return g;
+}
+
+double maxAbsK(const unk::Path& path) {
+  double m = 0.0;
+  for (const auto& pp : path) m = std::max(m, std::fabs(pp.k));
+  return m;
+}
+
+void testRoadChain() {
+  group("road_follow 链式前瞻");
+  unk::NavParams p;
+  p.follow_road = true;
+  p.sensor_range = 12.0;  // roadLookahead = 4.2
+  // 走廊半宽取 1.5：保证第 1 跳直行射线仍全自由（bearing≈0），而第 2 跳的直行
+  // 射线会在前瞻内被弯道下沿截短 → 擦边射线胜出 → 量出 θ₂' > 0。
+  // （走廊更宽时所有射线都自由，扇形量不到曲率 —— 这是方法的适用边界。）
+
+  // 直走廊：第 2 跳照常直行 → 切向修正 ≈ 0、κ ≈ 0；第 1 跳与单跳版完全一致
+  {
+    const double W = 20.0, half = W / 2;
+    unk::GridMap corr = makeGrid(W, 0.05, unk::kFree);
+    fillRect(&corr, -half, 3.0, half, half, unk::kOccupied);
+    fillRect(&corr, -half, -half, half, -3.0, unk::kOccupied);
+    const auto single = unk::road::lookAhead(corr, p);
+    const auto chain = unk::road::lookAheadChain(corr, p);
+    check(chain.valid && chain.hop_count == 2, "直走廊：链 2 跳成功");
+    checkNear(chain.bearing, single.bearing, 1e-12, "直走廊：第 1 跳方向与单跳一致");
+    checkNear(chain.reach, single.reach, 1e-12, "直走廊：第 1 跳 reach 与单跳一致");
+    check(std::fabs(chain.tangent_end - chain.bearing) < 0.06,
+          "直走廊：切向修正≈0（corr=" + f2s(chain.tangent_end - chain.bearing) + "）");
+    check(std::fabs(chain.kappa_est) < 0.02,
+          "直走廊：κ≈0（κ=" + f2s(chain.kappa_est) + "）");
+  }
+
+  // 左弯走廊：κ > 0、终点切向比弦向更偏左。
+  // 注：扇形量的是「擦边射线」偏角，κ_est 系统性低于真值 1/R（约为其一半），
+  // 断言按同数量级放宽 —— 符号与量级正确即可，精确标定是调参的事。
+  {
+    const double R = 20.0;
+    const unk::GridMap arc = makeArcCorridor(20.0, 0.05, R, 1.5);
+    const auto chain = unk::road::lookAheadChain(arc, p);
+    check(chain.valid && chain.hop_count == 2, "左弯：链 2 跳成功");
+    check(chain.kappa_est > 0.0, "左弯：κ>0（左正，κ=" + f2s(chain.kappa_est) + "）");
+    check(chain.kappa_est > 0.2 / R && chain.kappa_est < 1.5 / R,
+          "左弯：κ 量级与 1/R 同数量级（κ=" + f2s(chain.kappa_est) +
+              ", 1/R=" + f2s(1.0 / R) + "）");
+    check(chain.tangent_end > chain.bearing, "左弯：终点切向比弦向更偏左");
+  }
+
+  // 右弯走廊（镜像）：κ < 0、切向更偏右
+  {
+    const unk::GridMap arc = makeArcCorridor(20.0, 0.05, -20.0, 1.5);
+    const auto chain = unk::road::lookAheadChain(arc, p);
+    check(chain.valid && chain.hop_count == 2, "右弯：链 2 跳成功");
+    check(chain.kappa_est < 0.0, "右弯：κ<0（右负，κ=" + f2s(chain.kappa_est) + "）");
+    check(chain.tangent_end < chain.bearing, "右弯：终点切向比弦向更偏右");
+  }
+
+  // chain_hops=1 退化单跳：与 lookAhead 完全一致，无切向/曲率信息
+  {
+    unk::NavParams p1 = p;
+    p1.chain_hops = 1;
+    const unk::GridMap arc = makeArcCorridor(20.0, 0.05, 20.0, 1.5);
+    const auto single = unk::road::lookAhead(arc, p);
+    const auto chain = unk::road::lookAheadChain(arc, p1);
+    check(chain.hop_count == 1, "chain_hops=1：仅 1 跳");
+    checkNear(chain.bearing, single.bearing, 1e-12, "chain_hops=1：方向=单跳");
+    checkNear(chain.tangent_end, chain.bearing, 1e-12, "chain_hops=1：切向=弦向（无修正）");
+    checkNear(chain.kappa_est, 0.0, 1e-12, "chain_hops=1：κ=0");
+  }
+
+  // 走多近：road_step_dist 截断每跳落点 → 跳点等间距；chain_hops 可突破旧上限 3
+  {
+    unk::NavParams ps = p;
+    ps.chain_hops = 5;
+    ps.road_step_dist = 1.0;   // 走多近 = min(1.0, 1.0×看多深4.2) = 1.0
+    ps.road_step_ratio = 1.0;
+    const double W = 20.0, half = W / 2;
+    unk::GridMap corr = makeGrid(W, 0.05, unk::kFree);
+    fillRect(&corr, -half, 3.0, half, half, unk::kOccupied);
+    fillRect(&corr, -half, -half, half, -3.0, unk::kOccupied);
+    const auto chain = unk::road::lookAheadChain(corr, ps);
+    check(chain.valid && chain.hop_count == 5, "走多近：直走廊链 5 跳成功（突破旧上限 3）");
+    for (int i = 0; i < chain.hop_count; ++i) {  // 直走廊 bearing≈0 → 跳点沿 +x 等间距 1.0
+      checkNear(chain.hops[i].x, (i + 1) * 1.0, 0.12,
+                "走多近：P" + f2s(i + 1) + " 距原点≈" + f2s(i + 1) + "m");
+      check(std::fabs(chain.hops[i].y) < 0.2, "走多近：跳点近似在走廊中轴");
+    }
+  }
+
+  // 走多近·遇墙提前停：落点取 min(走多近, 自由距离)，任何跳点都不冲进障碍
+  {
+    unk::NavParams ps = p;
+    ps.chain_hops = 4;
+    ps.road_step_dist = 1.0;
+    ps.road_step_ratio = 1.0;
+    const double W = 20.0, half = W / 2;
+    unk::GridMap corr = makeGrid(W, 0.05, unk::kFree);
+    fillRect(&corr, -half, 3.0, half, half, unk::kOccupied);
+    fillRect(&corr, -half, -half, half, -3.0, unk::kOccupied);
+    fillRect(&corr, 2.5, -3.0, half, 3.0, unk::kOccupied);  // x≥2.5 横墙封死
+    const auto chain = unk::road::lookAheadChain(corr, ps);
+    check(chain.valid, "走多近遇墙：链仍有效");
+    bool all_free = true;
+    for (int i = 0; i < chain.hop_count; ++i)
+      if (!corr.feasibleAt(chain.hops[i].x, chain.hops[i].y)) all_free = false;
+    check(all_free, "走多近遇墙：所有跳点均落在自由区（不冲进障碍）");
+  }
+}
+
+void testCurveFit() {
+  group("curve_fit Hermite");
+  const unk::GridMap g = makeGrid(12.0, 0.05, unk::kFree);
+  const unk::Point2D p1{4.0, 0.0};
+  unk::Path out;
+
+  // 正常拟合：端点精确、端点切向吻合、曲率非零
+  const bool ok = unk::curve::fitHermite(g, p1, 0.0, 0.3, 0.1, 0.3, &out);
+  check(ok, "Hermite：开阔栅格拟合成功");
+  if (ok) {
+    check(out.size() >= 2, "Hermite：路径点数 ≥ 2");
+    checkNear(out.front().p.x, 0.0, 1e-9, "Hermite：起点=车位 x");
+    checkNear(out.front().p.y, 0.0, 1e-9, "Hermite：起点=车位 y");
+    checkNear(out.back().p.x, p1.x, 1e-9, "Hermite：终点=子目标 x");
+    checkNear(out.back().p.y, p1.y, 1e-9, "Hermite：终点=子目标 y");
+    const size_t n = out.size();
+    const double head_end =
+        std::atan2(out[n - 1].p.y - out[n - 2].p.y, out[n - 1].p.x - out[n - 2].p.x);
+    checkNear(head_end, 0.3, 0.05, "Hermite：终点切向≈θ₁");
+    const double head_start = std::atan2(out[1].p.y - out[0].p.y, out[1].p.x - out[0].p.x);
+    checkNear(head_start, 0.0, 0.05, "Hermite：起点切向≈θ₀");
+    check(maxAbsK(out) > 1e-3,
+          "Hermite：曲率非零（kmax=" + f2s(maxAbsK(out)) + "）→ 曲率限速可生效");
+  }
+
+  // 退化保护：切向差 < 1° / 距离过短 → 拒绝（直线已够，拟合只添噪声）
+  check(!unk::curve::fitHermite(g, p1, 0.0, 0.01, 0.1, 0.3, &out),
+        "Hermite：切向差 <1° → 拒绝");
+  check(!unk::curve::fitHermite(g, unk::Point2D{0.05, 0.0}, 0.0, 0.5, 0.1, 0.3, &out),
+        "Hermite：距离过短 → 拒绝");
+
+  // 碰撞回退：θ₀=0、θ₁>0 的 Hermite 中段向 y<0 侧鼓包（y_min≈-0.33 @ x≈2.8），
+  // 在鼓包区放一堵墙 → 曲线撞而弦（y=0 直线）不撞 → 必须拒绝，调用方回退直线
+  unk::GridMap wall = g;
+  fillRect(&wall, 1.5, -0.6, 2.8, -0.15, unk::kOccupied);
+  check(unk::grid::segmentFree(wall, 0.0, 0.0, 4.0, 0.0), "碰撞回退：弦线本身无碰撞");
+  check(!unk::curve::fitHermite(wall, p1, 0.0, 0.6, 0.1, 0.3, &out),
+        "碰撞回退：曲线鼓包扫进墙 → 拒绝");
+
+  // ── Catmull-Rom 样条 fitSpline：曲线精确经过所有控制点 ──
+  group("curve_fit Spline");
+  // 三点折线（含左偏）：端点钉死、曲线贴近中间点、弯处曲率非零
+  {
+    const std::vector<unk::Point2D> ctrl{{0.0, 0.0}, {3.0, 0.0}, {5.0, 1.5}};
+    unk::Path sp;
+    const bool ok = unk::curve::fitSpline(g, ctrl, 0.0, 0.1, 0.3, &sp);
+    check(ok, "Spline：开阔栅格三点拟合成功");
+    if (ok) {
+      checkNear(sp.front().p.x, 0.0, 1e-9, "Spline：起点=原点 x");
+      checkNear(sp.back().p.x, 5.0, 1e-9, "Spline：终点=最远跳点 x");
+      checkNear(sp.back().p.y, 1.5, 1e-9, "Spline：终点=最远跳点 y");
+      double min_d = 1e9;
+      for (const auto& pp : sp) min_d = std::min(min_d, std::hypot(pp.p.x - 3.0, pp.p.y));
+      check(min_d < 0.5, "Spline：曲线贴近中间跳点 (3,0)（d=" + f2s(min_d) + "）");
+      check(maxAbsK(sp) > 1e-3, "Spline：弯处曲率非零（kmax=" + f2s(maxAbsK(sp)) + "）");
+    }
+    // 共线三点：仍生成（近直线），曲率≈0（与 Hermite 拒绝 <1° 不同）
+    unk::Path lp;
+    check(unk::curve::fitSpline(g, {{0.0, 0.0}, {3.0, 0.0}, {5.0, 0.0}}, 0.0, 0.1, 0.3, &lp),
+          "Spline：共线三点仍生成（退化近直）");
+    check(maxAbsK(lp) < 0.05, "Spline：共线点曲率≈0（kmax=" + f2s(maxAbsK(lp)) + "）");
+    // 点数不足 / 总长过短 → 拒绝
+    check(!unk::curve::fitSpline(g, {{0.0, 0.0}}, 0.0, 0.1, 0.3, &sp), "Spline：仅 1 点 → 拒绝");
+    check(!unk::curve::fitSpline(g, {{0.0, 0.0}, {0.02, 0.0}}, 0.0, 0.1, 0.3, &sp),
+          "Spline：总长过短 → 拒绝");
+    // 碰撞回退：中间跳点被障碍覆盖 → 采样必命中 → 拒绝
+    unk::GridMap blocked = g;
+    fillRect(&blocked, 2.6, -0.6, 3.4, 0.6, unk::kOccupied);
+    check(!unk::curve::fitSpline(blocked, ctrl, 0.0, 0.1, 0.3, &sp),
+          "Spline：中间跳点被障碍覆盖 → 碰撞复查拒绝");
+  }
+}
+
 // ── speed_planner ────────────────────────────────────────────────
 
 void testSpeed() {
@@ -743,7 +942,7 @@ void testNavCore() {
   check(r0.emergency_stop && r0.recommended_speed == 0.0, "无终点 → 停车");
   check(r0.path.empty(), "无终点 → 不输出路径");
 
-  // 空世界 + 远处终点 → 直线路径（demo 的核心场景）
+  // 空世界 + 远处终点 → 样条路径（终点模式也跑链式前瞻，跳点延伸）
   nav.reset();
   const unk::GridMap fr = makeGrid(kWindow, 0.05, unk::kFree);
   const unk::Pose2D veh{0.0, 0.0, 0.0};
@@ -756,7 +955,9 @@ void testNavCore() {
   if (!r1.path.empty()) {
     check(!pathCollides(nav.workGrid(), r1.path), "空世界：路径在工作栅格上无碰撞");
     checkNear(r1.path.back().p.y, 0.0, 0.1, "空世界：路径为直线（y 不漂）");
-    checkNear(r1.path.back().s, p.lookahead(), 0.1, "空世界：路径长≈lookahead");
+    // 终点模式链式前瞻：路径延伸 = chain_hops × 走多近（空世界共线，样条退化为直线）
+    const double expected_len = p.chain_hops * std::min(p.road_step_dist, p.road_step_ratio * p.roadLookahead());
+    checkNear(r1.path.back().s, expected_len, 0.5, "空世界：路径长≈chain_hops×走多近");
   }
 
   // 全 unknown（完全未知环境）→ 乐观放行仍能出路径
@@ -848,6 +1049,91 @@ void testNavCoreRoad() {
   for (double t = 0.0; t <= 30.0; t += 0.1) last = nav.plan(makeRoadInput(dead, t, 0.0)).state;
   check(last == unk::NavState::ABORT || last == unk::NavState::RECOVERY,
         "沿路走廊封死：最终 RECOVERY/ABORT（不谎报 GO）");
+}
+
+// ── nav_core 沿路曲线路径（链式前瞻 + Hermite 集成）─────────────
+
+void testNavCoreRoadCurve() {
+  group("nav_core 沿路曲线路径");
+  unk::NavParams p;
+  p.follow_road = true;
+  p.sensor_range = 12.0;
+  p.inflation_radius = 0.5;       // 走廊半宽 2.0 - 膨胀 0.5 = 有效 1.5 → 扇形可感弯
+  p.footprint_clear_radius = 0.3;
+  p.stuck_time = 3.0;
+  p.curve_fit_enable = true;
+
+  auto makeRoadInput = [&](const unk::GridMap& grid, double t, double spd) {
+    unk::NavInput in;
+    in.now = t;
+    in.local_grid = grid;
+    in.goal_valid = false;
+    in.current_speed = spd;
+    in.speed_valid = true;
+    return in;
+  };
+
+  // 左弯走廊 R=20（κ_true=0.05）：膨胀后有效半宽 1.5，链式前瞻可感弯
+  const unk::GridMap arc = makeArcCorridor(20.0, 0.05, 20.0, 2.0);
+
+  // 低速：曲线拟合不受速度限制（已移除 curve_min_speed 门槛），样条正常工作
+  {
+    unk::NavCore nav(p);
+    const auto r = nav.plan(makeRoadInput(arc, 0.0, 0.2));
+    check(r.state == unk::NavState::GO && !r.path.empty(), "沿路弯道：低速 GO 出路径");
+    check(maxAbsK(r.path) > 1e-3,
+          "低速：曲线拟合不受速度限制（kmax=" + f2s(maxAbsK(r.path)) + "）");
+    check(r.reason.find("curve") != std::string::npos,
+          "低速：reason 含 curve 标记（" + r.reason + "）");
+  }
+
+  // 正常速度：曲线拟合、无碰撞、κ 输出
+  {
+    unk::NavCore nav(p);
+    const auto r = nav.plan(makeRoadInput(arc, 0.0, 1.0));
+    check(!r.path.empty(), "沿路弯道：出路径");
+    check(r.reason.find("curve") != std::string::npos,
+          "reason 含 curve 标记（" + r.reason + "）");
+    check(maxAbsK(r.path) > 1e-3,
+          "路径曲率非零（kmax=" + f2s(maxAbsK(r.path)) + "）→ 曲率限速唤醒");
+    check(!pathCollides(nav.workGrid(), r.path), "曲线路径无碰撞");
+    check(r.kappa_est > 0.0, "kappa_est > 0（左弯，κ=" + f2s(r.kappa_est) + "）");
+  }
+
+  // curve_fit_enable=false：完全回退直线行为（对照实验开关）
+  {
+    unk::NavParams p2 = p;
+    p2.curve_fit_enable = false;
+    unk::NavCore nav(p2);
+    const auto r = nav.plan(makeRoadInput(arc, 0.0, 1.0));
+    check(!r.path.empty() && r.reason.find("curve") == std::string::npos,
+          "关闭曲线：直线行为（无 curve 标记）");
+    check(maxAbsK(r.path) < 1e-9, "关闭曲线：k≡0");
+    checkNear(r.kappa_est, 0.0, 1e-12, "关闭曲线：不做链式前瞻，κ 不输出");
+  }
+
+  // 曲率限速契约：路径 k 非零 → lateral_accel 限速生效（合成 R=5 圆弧直接喂 speed::limit）
+  {
+    unk::NavParams ps;
+    ps.v_max = 8.0;        // 抬高 v_max 让曲率限速成为唯一 binding 项
+    ps.a_lat_max = 2.5;
+    ps.w_max = 10.0;
+    ps.dk_max = 0.0;       // 关掉曲率变化率项
+    const double R = 5.0;  // κ = 0.2 → v_curv = sqrt(2.5/0.2) ≈ 3.54 < 8
+    std::vector<unk::Point2D> arcPts;
+    // 采样间距必须远小于曲率基线（0.3m），否则基线两侧取点塌缩到同一格 → k≡0
+    for (int i = 0; i <= 50; ++i) {
+      const double a = 0.02 * static_cast<double>(i);  // 0..1 rad，弧长 5m，点距 0.1m
+      arcPts.push_back({R * std::sin(a), R * (1.0 - std::cos(a))});
+    }
+    const unk::Path arcPath = unk::geom::toPath(arcPts, 0.3);
+    const unk::GridMap freeGrid = makeGrid(20.0, 0.05, unk::kFree);
+    const auto sp = unk::speed::limit(arcPath, freeGrid, 3.0, ps);
+    check(!sp.emergency_stop, "曲率限速：不急停");
+    checkNear(sp.v, std::sqrt(ps.a_lat_max / 0.2), 0.35, "曲率限速：v ≈ sqrt(a_lat/κ)");
+    check(std::string(sp.limit_by) == "lateral_accel",
+          "曲率限速：limit_by=lateral_accel（实为 " + std::string(sp.limit_by) + "）");
+  }
 }
 
 // ── 曲率基线 + path_smooth ───────────────────────────────────────
@@ -1081,11 +1367,14 @@ int main() {
   testSmooth();
   testSubgoal();
   testRoadFollow();
+  testRoadChain();
+  testCurveFit();
   testSpeed();
   testController();
   testFsm();
   testNavCore();
   testNavCoreRoad();
+  testNavCoreRoadCurve();
   testParamsIo();
   std::printf("\n----------------------------------------\n");
   std::printf("通过 %d 项，失败 %d 项\n", g_pass, g_fail);

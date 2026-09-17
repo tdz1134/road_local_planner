@@ -87,6 +87,45 @@ roslaunch unk_nav_sim road_follow.launch use_localization:=true   # 供车速 + 
 roslaunch unk_nav_sim road_follow.launch gui:=false               # 无头
 ```
 
+### 曲线增强与旧版对照
+
+当前沿路主链路是“单跳/链式选点 → 条件 Catmull-Rom 样条或直线 → 限速 → FSM → Pure Pursuit”，不再调用 A* 或 `path_smooth`。
+链式前瞻是可关闭的增量增强；**终点切向向左偏仍可能使路径先向右鼓包**，尚未完成闭环验收。
+算法、四个新增参数及复核问题见 [`unk_nav/README.md`](../unk_nav/README.md) 的「二·五」。
+
+沿路配置由上述 launch 的 `config_file` 指向 `src/unk_nav/config/nav_params_road.yaml`，在该文件修改现有键：
+
+```yaml
+follow_road: true
+curve_fit_enable: false
+```
+
+关闭后不做接力扫描和拟合，使用加入曲线前的“单跳 + 直线路径”；**不是恢复 A* 搜索版本**。
+另外三个新增参数可保留。`chain_hops: 1` 也会退化单跳，但表达完整回退应优先使用总开关。
+不要用 `follow_road: false` 代替回退，它会改成需要全局目标的终点模式。
+**节点仅启动时读 YAML，修改后须重启导航节点；`rosparam set` 不生效。** 删除新增键会启用代码默认值，不等于关闭功能。
+
+受控仿真对照步骤（本次复核未实际执行）：
+
+1. 用 `curve_fit_enable: false` 跑基线；记录出生点、其他参数及场景状态。
+2. 停止仿真，将该键改成 `true`（其余保持一致），从相同初始状态重新启动。
+3. 选沿路 launch，例如体育场环；`road_nav.launch` 是终点模式，不能用来验证本增强。
+
+```bash
+source ~/projects/road_local_planner/devel/setup.bash
+roslaunch unk_nav_sim loop_stadium_road.launch use_localization:=true
+```
+
+- 提供 `/odom` 是为了得到 `current_speed`（行为状态机前进位移棘轮用），不是让沿路选点依赖全局定位；实车可用本体轮速。
+  默认不启动 `localization_node`：曲线拟合已不依赖车速，无 odom 时样条仍正常工作；仅前进位移棘轮退化为"仅规划连续失败"检测。
+- RViz 的 Fixed Frame 设为 `base_link`，观察 `/unk_nav/path` 是否正确跟弯，有无先反向偏移、贴墙或速度门槛附近跳变。
+- RViz 勾选 `Chain` 图层（`/unk_nav/chain`）叠加链式前瞻：黄色接力折线串起原点→P1→P2→P3（即样条控制骨架），绿球是子目标 P1，青色箭头是最远跳点的出射方向，文本给出 κ 与 curve/line，直接看出“往前看了几跳、路往哪弯、这帧有没有真用曲线”。实际跟踪的样条曲线本身叠加在 `/unk_nav/path` 上。
+- `rostopic echo /unk_nav/state` 查看 `curve`、`kappa=`、`limit_by=`；`kappa=` 只是链诊断，单独出现不代表采用了曲线或发生降速。
+- 推荐速度查看 `nav_node` 输出的 `speed=...`；`/cmd_vel` 是跟踪和指令限幅后的执行命令，不能直接当作推荐速度。
+- `chain_hops=3` 会给样条多一个控制点（曲线延伸更远、拐点更多），但仍是启发式，不应把“多扫一跳”视为已验证的急弯改进。
+
+本轮仅完成代码复核、工作区增量构建和离线测试（289 通过 / 1 项既有沿路 FSM 失败），未完成 Gazebo 轨迹、弯道降速和耗时验收。
+
 ---
 
 ## 架构
@@ -179,9 +218,10 @@ cmd.angular.z = tc.w;
 | `/cmd_vel` | geometry_msgs/Twist | nav_node → Scout | 速度指令（linear.x + angular.z） |
 | `/unk_nav/path` | nav_msgs/Path | nav_node 发布 | 当前规划路径（目标模式 odom 系，沿路模式 base_link 系） |
 | `/unk_nav/state` | std_msgs/String | nav_node 发布 | 导航状态（GO/IDLE/ARRIVED/ABORT + 原因） |
-| `/unk_nav/work_grid` | nav_msgs/OccupancyGrid | nav_node 发布 | 调试：膨胀后 A* 实际搜索的栅格（规划器眼中的世界） |
+| `/unk_nav/work_grid` | nav_msgs/OccupancyGrid | nav_node 发布 | 调试：膨胀并清理足迹后的工作栅格，用于选点、曲线检查与限速复查 |
 | `/unk_nav/fan_candidates` | visualization_msgs/Marker | nav_node 发布 | 调试：子目标扇形展开的候选 |
 | `/unk_nav/goal_marker` | visualization_msgs/Marker | nav_node 发布 | 调试：当前车体系子目标（绿色圆柱） |
+| `/unk_nav/chain` | visualization_msgs/MarkerArray | nav_node 发布 | 调试：链式前瞻可视化——接力折线（原点→P1→P2→P3）+ 跳点球 + 最远跳点出射方向箭头 + κ/curve 文本；仅沿路模式 `curve_fit_enable=true` 时有内容 |
 
 ### 电机控制（底层）
 
@@ -271,7 +311,7 @@ cmd.angular.z = tc.w;
 | 撞障碍/贴边太近 | `inflation_radius`↑、`pursuit_lookahead`↓ |
 | 窄通道过不去/老 ABORT | `inflation_radius`↓ |
 | 不绕障碍直冲墙 | `lookahead_ratio`↑ |
-| 路径抖动 | `pursuit_lookahead`↑、`smooth_laplacian_iters`↓ |
+| 路径抖动 | 检查 `road_fan_step_deg`、`chain_ema_alpha`；跟踪行为检查 `pursuit_lookahead`，当前不调用拉普拉斯平滑 |
 | 到点不停 | `goal_tolerance`↓ |
 
 注：`/unk_nav/state` 话题里的 `subgoal_trunc` 表示子目标被膨胀区截断（终点方向有墙，

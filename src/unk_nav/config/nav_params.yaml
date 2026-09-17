@@ -30,6 +30,8 @@
 # 贴墙不减速/冲过终点   → stop_horizon 自动生效，查 limit_by=subgoal_horizon
 # 凹槽内振荡不绕        → subgoal_fan_half_deg↑、subgoal_align_w↓
 # 终点贴墙到不了 ABORT  → goal_clear_radius ≥ inflation_radius
+# 沿路弯道不减速/切内墙 → curve_fit_enable、chain_hops↑
+# κ/曲线逐帧抖动        → chain_ema_alpha↓（更平滑但滞后）、road_fan_step_deg↓
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── 车辆能力（Scout v2 差速底盘）──
@@ -137,3 +139,15 @@ road_fan_step_deg: 3.0      # 扇形角步长 deg
 road_lookahead_ratio: 0.35  # 沿路前瞻 = ratio×sensor_range
 road_free_w: 2.0            # 打分权重：前方自由距离（越空越想走 → 弯道偏向外侧长边）。必须 > road_align_w
 road_align_w: 1.0           # 打分权重：车头对齐 cosθ（越想直行 → 抑制摆动）
+
+# ── 链式前瞻 + 曲线拟合（两种模式共用）──
+# "看多深"扇形选方向，"走多近"= min(road_step_dist, road_step_ratio×看多深) 定每跳落点，
+# 跳点串成 Catmull-Rom 样条控制点（曲线经过 O→P1→P2→…）+ 前方曲率 κ（左正右负）。
+# 终点模式额外加 goal_align_w × cos(射线−子目标方向) 打分项，偏向目标方向。
+chain_hops: 2               # 点数 1..16；1=退化单跳（走直线不拟合）
+road_step_dist: 100.0       # 走多近·固定米；给大值=不额外限制
+road_step_ratio: 1.0        # 走多近·比例 (0,1]；1.0=走到看多深末端（旧行为，零回归）
+chain_ema_alpha: 0.3        # κ 跨帧 EMA 系数 (0,1]；扇形量化有噪声，大=快但抖
+goal_align_w: 1.0           # 终点模式链式打分：子目标方向对齐权重；0=不偏向（沿路模式默认）
+                            # 终点模式建议 1.0~2.0；走廊弯曲时与 free_w 自然平衡
+curve_fit_enable: true      # false=完全恢复直线路径行为（实验开关）

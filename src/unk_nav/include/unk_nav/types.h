@@ -271,6 +271,26 @@ struct NavParams {
                                        // 否则对齐项 cosθ 过强，车会顶着弯道外墙直到几乎撞上才转
   double road_align_w         = 1.0;   // 打分权重：与车头对齐度 cosθ（越想直行，抑制无谓摆动）
 
+  // ---- 链式前瞻 + 曲线拟合 ----
+  // 单跳扇形扫描只有"弦向"信息；链式前瞻在各跳落点接力再扫，得到一串跳点 hops（供
+  // fitSpline 作 Catmull-Rom 样条控制点，曲线经过 O→P1→P2→…）与前方曲率 κ（诊断）。
+  // κ 经曲线路径点的 k 字段自动接入 speed_planner 的三条曲率限速（否则直线路径 k≡0 休眠）。
+  //
+  // "看多深"与"走多近"解耦：扇形扫描用 roadLookahead()（看多深）选方向防短视，
+  // 但每跳落点只沿选中方向前进"走多近"= min(road_step_dist, road_step_ratio × 看多深)。
+  //
+  // 终点模式：链式扫描也启用，扇形打分额外加 goal_align_w × cos(与子目标夹角) 偏向目标方向。
+  // goal_align_w=0 时该项不生效（沿路模式默认），>0 时射线越朝子目标打分越高。
+  int    chain_hops       = 2;      // 曲线穿过的跳点数 1..16；1 = 退化单跳（走直线不拟合）
+  double road_step_dist   = 1e9;   // 走多近·固定米 m；每跳落点沿选中方向最多前进这么远
+  double road_step_ratio  = 1.0;   // 走多近·比例 (0,1]；× 看多深 L。实际走多近 = min(固定米, 比例×L)。
+                                   // 默认 1.0 → 走多近 = L → 落点 = 射线末端（旧行为，零回归）
+  double chain_ema_alpha  = 0.3;   // κ 的跨帧 EMA 系数 (0,1]；扇形 3° 量化有噪声，
+                                   // 大 = 响应快但抖，小 = 平滑但滞后
+  double goal_align_w     = 0.0;   // 终点模式链式打分：子目标方向对齐权重；0=不偏向（沿路模式）
+                                   // 终点模式建议 1.0~2.0；走廊弯曲时与 free_w 自然平衡
+  bool   curve_fit_enable = true;  // false = 完全恢复直线路径行为（实验开关）
+
   // ---- 派生量（勿手工设置）----
   double lookahead() const { return lookahead_ratio * sensor_range; }
   double subgoalMin() const { return subgoal_min_ratio * sensor_range; }
@@ -301,6 +321,13 @@ struct NavResult {
   bool subgoal_reachable = false;  // 是否生成了通往子目标的路径（当前为直线路径）
   Point2D goal_base;               // 终点在车体系的位置（调试/可视化用），无效时={0,0}
   bool goal_base_valid = false;    // goal_base 是否有效
+  double kappa_est = 0.0;          // 链式前瞻估计的前方曲率 1/m（EMA 后，左正右负；仅沿路模式非零）
+
+  // ── 链式前瞻 / 曲线拟合可视化（仅沿路模式且 curve_fit_enable 时有值，调试用）──
+  Point2D chain_hops[16];          // 样条控制跳点（不含原点），车体系：chain_hops[0]=P1、[1]=P2…
+  int chain_hop_count = 0;         // 总跳数（含第一跳）0..16
+  bool curve_used = false;         // 本帧是否真用了 Catmull-Rom 样条（false=直线或碰撞回退）
+
   std::string reason = "init";     // 调试说明
 
   // 扇形候选（调试可视化用。终点模式仅扇形展开时非空；沿路模式每帧展开故总是非空）

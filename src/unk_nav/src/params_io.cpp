@@ -79,6 +79,13 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"road_lookahead_ratio", kDouble, &p->road_lookahead_ratio},
       {"road_free_w", kDouble, &p->road_free_w},
       {"road_align_w", kDouble, &p->road_align_w},
+      // 链式前瞻 + 曲线拟合（沿路模式专用）
+      {"chain_hops", kInt, &p->chain_hops},
+      {"road_step_dist", kDouble, &p->road_step_dist},
+      {"road_step_ratio", kDouble, &p->road_step_ratio},
+      {"chain_ema_alpha", kDouble, &p->chain_ema_alpha},
+      {"goal_align_w", kDouble, &p->goal_align_w},
+      {"curve_fit_enable", kBool, &p->curve_fit_enable},
   };
 }
 
@@ -161,6 +168,16 @@ bool loadNavParams(const std::string& yaml_path, NavParams* out,
     problems.push_back("goal_clear_radius must be >= 0");
   if (out->subgoal_align_w <= out->subgoal_free_w + 1e-9)
     problems.push_back("subgoal_align_w must be > subgoal_free_w");
+  if (out->chain_hops < 1 || out->chain_hops > 16)
+    problems.push_back("chain_hops must be in [1, 16]");
+  if (out->road_step_dist <= 0.0)
+    problems.push_back("road_step_dist must be > 0");
+  if (out->road_step_ratio <= 0.0 || out->road_step_ratio > 1.0)
+    problems.push_back("road_step_ratio must be in (0, 1]");
+  if (out->chain_ema_alpha <= 0.0 || out->chain_ema_alpha > 1.0)
+    problems.push_back("chain_ema_alpha must be in (0, 1]");
+  if (out->goal_align_w < 0.0)
+    problems.push_back("goal_align_w must be >= 0");
 
   if (!problems.empty()) {
     if (err != nullptr) {
