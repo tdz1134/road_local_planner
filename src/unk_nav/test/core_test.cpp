@@ -766,6 +766,28 @@ void testCurveFit() {
     check(!unk::curve::fitSpline(blocked, ctrl, 0.0, 0.1, 0.3, &sp),
           "Spline：中间跳点被障碍覆盖 → 碰撞复查拒绝");
   }
+
+  // 短末段回归：末段被截短时（对应链式前瞻末跳被障碍/终点截短），
+  // 弦长参数化不应产生曲率爆炸（实测 kmax≈0.46；若回退到旧版均匀参数化会飙到 ~10，
+  // 阈值 1.5 兼顾两者：给弦长版 3 倍余量，又能捕获参数化回退）。
+  {
+    const std::vector<unk::Point2D> sl{{0.0, 0.0}, {1.2, 0.2}, {2.4, 0.5}, {3.6, 0.9},
+                                       {3.8, 1.0}};
+    unk::Path sp;
+    const bool ok = unk::curve::fitSpline(g, sl, 0.0, 0.1, 0.3, &sp);
+    check(ok, "Spline：短末段拟合成功");
+    if (ok) {
+      for (const auto& c : sl) {
+        double dmin = 1e9;
+        for (const auto& pp : sp)
+          dmin = std::min(dmin, std::hypot(pp.p.x - c.x, pp.p.y - c.y));
+        check(dmin < 0.1, "Spline：短末段精确过跳点 (" + f2s(c.x) + "," + f2s(c.y) +
+                              ") d=" + f2s(dmin));
+      }
+      check(maxAbsK(sp) < 1.5,
+            "Spline：短末段无曲率爆炸（kmax=" + f2s(maxAbsK(sp)) + "）");
+    }
+  }
 }
 
 // ── speed_planner ────────────────────────────────────────────────

@@ -5,8 +5,9 @@
 // 「原地转 θ 再直线走」的运动不连续会让纯跟踪切内角、横向误差放大。链式前瞻
 // （road_follow.h）量出的跳点 hops 提供了曲线要经过的一系列走廊落点。
 //
-// 主推方法 fitSpline（Catmull-Rom 样条）：曲线**精确经过**给定的一组控制点
-// （起点=车位、各跳跳点），切向由相邻点差分自动估计、起点切向钉死车头方向。
+// 主推方法 fitSpline（弦长参数化 Catmull-Rom 样条）：曲线**精确经过**给定的一组控制点
+// （起点=车位、各跳跳点），切向由相邻两段割线方向平均自动估计、起点切向钉死车头方向，
+// 每段按自身弦长缩放（非均匀参数化，避免短末段曲率爆炸）。
 // 滚动重规划下终点只是本帧过渡量，让曲线延伸贴合走廊到最远跳点，比"停在第一跳
 // 末端"更能预示道路走向。
 //
@@ -33,9 +34,10 @@ namespace curve {
 bool fitHermite(const GridMap& work_grid, const Point2D& p1, double theta0, double theta1,
                 double spacing, double curvature_baseline, Path* out);
 
-// Catmull-Rom 样条：过 control_pts（车体系，依次 [0]=起点/车位、[1..]=各跳跳点），
-// 每段用相邻点差分定切向（起点切向钉死为 start_tangent、末点用末段方向外推），
-// 按 spacing 逐段采样成 Path（s 与基线法曲率 k 由 geom::toPath 生成）。
+// 弦长参数化 Catmull-Rom 样条：过 control_pts（车体系，依次 [0]=起点/车位、[1..]=各跳跳点），
+// 切向取相邻两段单位割线方向平均（起点方向钉死为 start_tangent、末点取末段单位方向），
+// 每段端点导数按本段弦长缩放（非均匀参数化，根治短末段曲率爆炸），按 spacing 逐段采样成
+// Path（s 与基线法曲率 k 由 geom::toPath 生成）。近等距跳点下与旧版均匀参数化几乎一致。
 // 与 fitHermite 的区别：样条精确经过所有中间点、支持任意点数；Hermite 只有两端点。
 //
 // 返回 false（调用方应回退直线）的情形：

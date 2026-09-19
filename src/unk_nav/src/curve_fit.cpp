@@ -62,36 +62,50 @@ bool fitSpline(const GridMap& work_grid, const std::vector<Point2D>& control_pts
   if (n < 2) return false;  // 至少起点 + 一个落点
 
   const double sp = std::max(spacing, 1e-6);
+
+  // 各段弦长 D[i] = |P[i+1]−P[i]|（i=0..n-2）与折线总长。
+  std::vector<double> D(static_cast<size_t>(n - 1));
   double total = 0.0;
-  for (int i = 0; i + 1 < n; ++i)
-    total += std::hypot(control_pts[i + 1].x - control_pts[i].x,
-                        control_pts[i + 1].y - control_pts[i].y);
+  for (int i = 0; i + 1 < n; ++i) {
+    D[static_cast<size_t>(i)] = std::hypot(control_pts[i + 1].x - control_pts[i].x,
+                                           control_pts[i + 1].y - control_pts[i].y);
+    total += D[static_cast<size_t>(i)];
+  }
   if (total < sp) return false;  // 总长过短没有拟合意义
 
-  // 各点切向量（Catmull-Rom 均匀参数、张力 0.5）：
-  //   · 起点：方向钉死为车头（start_tangent），模长取首段弦长，避免起步突然加减速；
-  //   · 中间点：相邻两点中心差分 0.5·(P[i+1]−P[i−1])，天然 C1 连续；
-  //   · 末点：末段方向外推 P[n−1]−P[n−2]（等价于镜像虚拟点后做中心差分）。
-  std::vector<Point2D> T(n);
-  {
-    const double s0 = std::hypot(control_pts[1].x - control_pts[0].x,
-                                 control_pts[1].y - control_pts[0].y);
-    T[0] = Point2D{s0 * std::cos(start_tangent), s0 * std::sin(start_tangent)};
+  // 各点切向量 G[i] = dP/dt（t 为弦长参数，非均匀）。弦长 Catmull-Rom：
+  //   · 起点：方向钉死为车头（start_tangent），模长取 1（单位割线量纲，下方缩放后=首段弦长）；
+  //   · 中间点：相邻两段单位割线方向平均 0.5·(u[i−1]+u[i])，天然 C1 连续；
+  //   · 末点：末段单位方向 u[n−2]。
+  // 相比旧版均匀参数化（切向=0.5·(P[i+1]−P[i−1])、直接塞进 t∈[0,1]），此处切向按
+  // “每段自身弦长”缩放（见下方采样）。根治短末段过冲：旧版长入段撑出的大切向被原样
+  // 用进极短的末段 → tight loop、曲率爆炸（实测峰值 κ 11.8→1.0）；弦长缩放让短段自动
+  // 拿到小切向。均匀跳点下与旧版几乎一致（近等距时两者收敛）。
+  auto segUnit = [&](int i) -> Point2D {  // 第 i 段单位方向；退化段(长度≈0)返回 0
+    const double d = std::max(D[static_cast<size_t>(i)], 1e-9);
+    return Point2D{(control_pts[i + 1].x - control_pts[i].x) / d,
+                   (control_pts[i + 1].y - control_pts[i].y) / d};
+  };
+  std::vector<Point2D> G(static_cast<size_t>(n));
+  G[0] = Point2D{std::cos(start_tangent), std::sin(start_tangent)};
+  for (int i = 1; i + 1 < n; ++i) {
+    const Point2D a = segUnit(i - 1), b = segUnit(i);
+    G[static_cast<size_t>(i)] = Point2D{0.5 * (a.x + b.x), 0.5 * (a.y + b.y)};
   }
-  for (int i = 1; i + 1 < n; ++i)
-    T[i] = Point2D{0.5 * (control_pts[i + 1].x - control_pts[i - 1].x),
-                   0.5 * (control_pts[i + 1].y - control_pts[i - 1].y)};
-  T[n - 1] = Point2D{control_pts[n - 1].x - control_pts[n - 2].x,
-                     control_pts[n - 1].y - control_pts[n - 2].y};
+  G[static_cast<size_t>(n - 1)] = segUnit(n - 2);
 
-  // 逐段三次 Hermite 拼接（段参数 t∈[0,1]，切向量即该参数化的端点导数）。
+  // 逐段三次 Hermite 拼接。段参数 s∈[0,1]，端点导数 = 弦长导数 × 本段弦长 D[i]
+  //（链式法则 dP/ds = dP/dt · dt/ds，此处 dt/ds = D[i]）。同一节点对相邻两段给出
+  // 不同的 s-空间导数（各自按本段弦长缩放），这正是非均匀参数化消除过冲的机制。
   std::vector<Point2D> dense;
   dense.push_back(control_pts[0]);
   for (int i = 0; i + 1 < n; ++i) {
     const Point2D &P0 = control_pts[i], &P1 = control_pts[i + 1];
-    const Point2D &M0 = T[i], &M1 = T[i + 1];
-    const double seg = std::hypot(P1.x - P0.x, P1.y - P0.y);
-    const int k = std::max(1, static_cast<int>(std::ceil(seg / sp)));
+    const double Di = D[static_cast<size_t>(i)];
+    const Point2D &Gi = G[static_cast<size_t>(i)], &Gj = G[static_cast<size_t>(i + 1)];
+    const Point2D M0{Gi.x * Di, Gi.y * Di};
+    const Point2D M1{Gj.x * Di, Gj.y * Di};
+    const int k = std::max(1, static_cast<int>(std::ceil(Di / sp)));
     for (int j = 1; j <= k; ++j) {  // j 从 1 起：段起点即上段末点，已入列，跳过
       const double t = static_cast<double>(j) / k;
       const double t2 = t * t, t3 = t2 * t;
