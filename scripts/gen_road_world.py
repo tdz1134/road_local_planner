@@ -164,6 +164,26 @@ PRESETS = {
                  (49.0, 0.0), (99.0, 0.0), (102.0, -1.5), (107.0, -1.5),
                  (110.0, 0.0), (130.0, 0.0)],
     },
+    # 高速加减速闭合环（长圈 ~179m）：专为「看多深随速度」(lookahead_speed_k) 与
+    # 速度规划而设。速度剖面在「满速直道 → 急刹弯 → 巡航大弯」间明显摆动：
+    #   · 42m 长直道把车冲到顶速 v_max=4m/s（此时看多深 L 应被速度拉长）；
+    #   · 紧接 R4.5 急弯按横向加速度限速 v=√(a_lat·R)=√(1.5×4.5)≈2.6m/s，逼出重刹；
+    #   · R14 大半径弯 v=√(1.5×14)≈4.6→封顶 4m/s，高速巡航不过度减速。
+    # 路宽 5.5m → 净通行 5.5-1.4=4.1m（高速下留足横向余量）；急弯内缘半径
+    # 4.5-2.75=1.75m 远大于 MIN_CURB_R 0.35，路缘不折返、跟路稳健（先保证能跑完）。
+    # 前半净转角 90+90=180°、后半重复 → 点对称闭合；全程左转=凸环，无自交。
+    # 加速能力：规划器不限前向加速度，控制层 cmd_a_max=3m/s² 下 0→4m/s 仅 ~3m，
+    # 故 20m/42m 直道都能跑满顶速，加减速段区分度足。
+    'speedloop': {
+        'width': 5.5, 'ds': 0.35, 'spawn_s': 2.0,
+        'road_config': '$(find unk_nav)/config/nav_params_road_speed.yaml',
+        'sections': [
+            ('line', 42.0),          # 长加速直道 → 冲满 4m/s
+            ('arc', 4.5, 90.0),      # 急刹弯：降到 ~2.6m/s，看多深随之收窄
+            ('line', 20.0),          # 再加速直道
+            ('arc', 14.0, 90.0),     # 高速大半径弯：维持 ~4m/s，看多深保持拉长
+        ] * 2,
+    },
 }
 
 WORLD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -743,16 +763,18 @@ def writable_by_gen(path):
         return GEN_MARK in f.read()
 
 
-def build_launch(name, spawn, world_file, out_path, mode, notes, extra_args=""):
+def build_launch(name, spawn, world_file, out_path, mode, notes, extra_args="",
+                 road_config=None):
     """
     mode='road' 沿路（无定位）；mode='goal' 终点导航（有定位，RViz 点目标）。
     notes 是往头部注释里追加的若干行（各场景自己的实测告警），可为空。
-    返回 False 表示为了保住手改内容而跳过。
+    road_config 非空时，沿路模式的 config_file 指向它（而非共享 nav_params_road.yaml），
+    用于单场景专用参数（如 speedloop 开启速度前瞻）。返回 False 表示为保住手改内容而跳过。
     """
     sx, sy, syaw = spawn
     world_base = os.path.basename(world_file)
     if mode == 'road':
-        cfg = "$(find unk_nav)/config/nav_params_road.yaml"
+        cfg = road_config or "$(find unk_nav)/config/nav_params_road.yaml"
         loc = ('  <node name="localization_node" pkg="unk_nav_sim" '
                'type="localization_node"\n'
                '        output="screen" if="$(arg use_localization)">\n'
@@ -939,7 +961,8 @@ def build_one(name, args):
     for mode in ('road', 'goal'):
         lp = os.path.join(LAUNCH_DIR, f"{stem}_{mode}.launch")
         if build_launch(name, sp, out_world, lp, mode,
-                        preset.get('launch_notes', [])):
+                        preset.get('launch_notes', []),
+                        road_config=preset.get('road_config')):
             check_xml(lp)
             made += 1
     print(f"[{name}] world 已写出；launch 新写/更新 {made} 个"
@@ -957,6 +980,9 @@ LAUNCH_NOTES = {
     'asymturn': ["两侧特性不一样：大圆弧弯（R12，两侧近乎平行）与近直角弯并存。",
                  "直角弯处偏置 -1.5m → 左缘半径 1.2m（近直角）、右缘半径 7.2m（大圆弧），",
                  "同一次转向两侧曲率差 6 倍。按「走廊几何中线」跑的实现会在直角处吃内缘。"],
+    'speedloop': ["高速加减速长圈（~180m）：42m 直道冲满 4m/s → R4.5 急弯重刹到 ~2.6m/s → R14 大弯巡航。",
+                  "专为验证「看多深随速度」(lookahead_speed_k)：顶速直道 L 应拉长、急弯降速 L 应收窄。",
+                  "导航前确认 nav_params_road.yaml 的 v_max=4.0；若要看速度前瞻效果，需将 lookahead_speed_k 调为 >0（默认 0=不随速度）。"],
 }
 for _k, _v in LAUNCH_NOTES.items():
     PRESETS[_k]['desc'] = _v[0]
