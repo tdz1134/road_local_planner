@@ -54,6 +54,9 @@ compile_commands.json
 # demo / 仿真输出的轨迹 dump
 trajectory.csv
 
+# plot_cmd_vel.py 抓的控制量记录（csv/png/txt），默认落在工作区根目录
+cmdvel_*
+
 # rosbag 录制
 *.bag
 
