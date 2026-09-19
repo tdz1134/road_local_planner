@@ -1,143 +1,105 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# unk_nav 算法库配置（唯一事实源，与 ROS 无关）
+# unk_nav 终点模式配置（有定位，全局终点投影子目标）
 #
-# 谁在读这个文件：
-#   · 仿真：nav_node 启动时经 unk::loadNavParams() 读取（路径由 launch 的
-#     config_file 私有参数传入，不走 ROS 参数服务器）
-#   · 离线 demo：./unk_nav_demo --config <本文件路径>
-#   · 实车/MDC：集成方直接调 unk::loadNavParams()，同一份配置
+# 加载方式：nav_node 启动时经 unk::loadNavParams() 读取（路径由 launch 的
+#           config_file 私有参数传入，不走 ROS 参数服务器）
 #
 # 格式约束（params_io.cpp 严格校验）：
-#   · 顶层扁平 `key: value`，key 与 types.h::NavParams 字段一一对应
-#   · 写了未知 key 或类型不对 → 启动直接报错退出（拼错 key 不会静默失效）
-#   · 没写的 key → 保持代码默认值
-#   · 加新参数三处同步：types.h 字段 + params_io.cpp 绑定表 + 本文件一行
+#   · 顶层扁平 key: value，key 与 types.h::NavParams 字段一一对应
+#   · 未知 key / 类型不对 → 启动直接报错退出
+#   · 未写的 key → 保持 types.h::NavParams 代码默认值
+#   · 加参数三处同步：types.h 字段 + params_io.cpp 绑定表 + 本文件一行
 #
 # ── 症状 → 该动哪个参数（速查）────────────────────────────────────────────
 # 撞障碍/贴边太近      → inflation_radius↑、pursuit_lookahead↓
-# 窄通道过不去/老 ABORT → inflation_radius↓（膨胀带会把窄通道堵死）
-# 绿线终点扎进膨胀带    → 看 /unk_nav/state 有无 subgoal_trunc（有=正常截断）；
-#                        持续截断不前进 → inflation_radius↓ 或 goal_snap_dist↑
-# 不绕障碍、直冲墙      → lookahead_ratio↑（看更远，但也更慢反应）
-# 刹车顿挫/急停频繁     → safety_margin↑（更早减速）、a_decel_max↓、t_reaction↑
+# 窄通道过不去/老 ABORT → inflation_radius↓
+# 不绕障碍、直冲墙      → lookahead_ratio↑
+# 刹车顿挫/急停频繁     → safety_margin↑、a_decel_max↓、t_reaction↑
 # 到点不停/停太偏       → goal_tolerance↓
-# 跟踪不紧/车身拖在弯外  → control_freq↑（控制环与规划环解耦）、w_max↑
-# 指令跳变/执行器饱和   → cmd_a_max↓、cmd_w_dot_max↓（查底盘真实能力）
+# 跟踪不紧/车身拖在弯外  → control_freq↑、w_max↑
+# 指令跳变/执行器饱和   → cmd_a_max↓、cmd_w_dot_max↓
 # 卡住不放弃/放弃太快   → stuck_time、recovery_max_retry
-# 路径爱穿未知区        → unknown_cost↑（1=无所谓，越大越躲开 unknown）
-# 贴墙不减速/冲过终点   → stop_horizon 自动生效，查 limit_by=subgoal_horizon
+# 贴墙不减速/冲过终点   → stop_horizon 自动生效
 # 凹槽内振荡不绕        → subgoal_fan_half_deg↑、subgoal_align_w↓
 # 终点贴墙到不了 ABORT  → goal_clear_radius ≥ inflation_radius
-# 沿路弯道不减速/切内墙 → curve_fit_enable、chain_hops↑
-# κ/曲线逐帧抖动        → chain_ema_alpha↓（更平滑但滞后）、road_fan_step_deg↓
+# 过弯切内墙/不减速     → chain_hops↑、curve_fit_enable
+# κ/曲线逐帧抖动        → chain_ema_alpha↓、road_fan_step_deg↓
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── 车辆能力（Scout v2 差速底盘）──
-v_max: 1.5                  # 最大线速度 m/s（Scout v2 实际可达 1.5）
-w_max: 1.5                  # 最大角速度 rad/s（纯跟踪限幅 + 过弯限速 + 倒角半径共用）。
-                            # Scout v2 仿真限速 2.0 rad/s（scout2_control.yaml）；旧值
-                            # 0.8 只有能力的 40%，弯中角速度被削 → 横向稳态误差不收敛
-a_decel_max: 1.0            # 最大减速度 m/s²：制动包络的斜率，调小=更早开始减速
-a_lat_max: 1.5              # 最大横向加速度 m/s²：a_lat=v²/r，高速拐角的限速来源
-robot_radius: 0.46          # 车体半径 m（长0.925/2 取半长轴）——膨胀的基准，必须真实
+# ── 1. 车辆能力（Scout v2 差速底盘）──
+v_max: 1.5                  # 最大线速度 m/s
+w_max: 1.5                  # 最大角速度 rad/s（Scout v2 仿真限速 2.0；旧值 0.8 只有 40%）
+a_decel_max: 1.0            # 最大减速度 m/s²：调小=更早开始减速
+a_lat_max: 1.5              # 最大横向加速度 m/s²：高速拐角限速来源
+robot_radius: 0.46          # 车体半径 m（膨胀基准，必须真实）
 
-# ── 感知尺度（所有规划距离的无量纲基准）──
-sensor_range: 20.0          # 激光有效量程 m。lookahead/subgoal_min 都乘这个值，
-                            # 换雷达只改这里，其余比例自动迁移
+# ── 2. 感知范围（所有规划距离的无量纲基准）──
+perception_range: 20.0      # 上游局部感知栅格的范围基准 m。换感知源/换车型只改这里，其余比例自动迁移
 
-# ── 栅格预处理 ──
-# 膨胀半径 = robot_radius + 跟踪误差余量。余量是给控制器跟踪误差留的：
-# 路径只保证中心线有 (inflation_radius - robot_radius) 的净空。
-# 注意：膨胀带两侧总宽 2×inflation，太大会把窄通道整个堵死 → 频繁 RECOVERY。
-inflation_radius: 0.7      # 【当前实验值，偏大】推荐 0.7~0.9；若 goal_snap_dist <
-                            # 带半宽，子目标落进带里时 A* 吸附逃不出（现已由射线截断兜底）
-footprint_clear_radius: 0.50  # 车体足迹清空半径 m（膨胀后把车脚下掏空，防起点死锁）。
-                              # 只抹「膨胀出来的」格，lidar 真打到的障碍在本半径内
-                              # 仍保持 occupied。必须 ≥ robot_radius 且 < inflation_radius
-inflate_unknown: false      # unknown 是否也膨胀成障碍。true=保守（不确定的当障碍），
-                            # false=乐观探索（默认，未知区可通行但代价略高）
+# ── 3. 栅格预处理 ──
+inflation_radius: 0.7       # 膨胀半径 = robot_radius + 跟踪误差余量 m。
+                            # 太大把窄通道堵死 → RECOVERY
+footprint_clear_radius: 0.50  # 车体足迹清空半径 m（≥robot_radius 且 <inflation_radius）。
+                              # 只抹膨胀出来的格，lidar 真打到的障碍仍保持 occupied
+inflate_unknown: false      # true=保守（未知当障碍）；false=乐观探索（默认）
 
-# ── 滚动时域规划（子目标 = 车→终点直线上 min(前瞻, 终点距离, 窗口) 处，撞膨胀带则回退）──
-lookahead_ratio: 0.6       # 前瞻距离 = 0.35 × 20 = 7.0m → 绿线最大长度就是它。
-                            # 调大=看得远走得顺但反应慢；调小=贴地但抖
-subgoal_min_ratio: 0.10     # 子目标最小距离 = 0.10 × 20 = 2.0m（前瞻的下限保护，
-                            # 防止 sensor_range 缩小时子目标贴脸）
-path_spacing: 0.05          # 路径等距重采样间距 m。影响曲率估计和速度规划的点密度；
-                            # 建议 ≈ 栅格分辨率的一半
-curvature_baseline: 0.30    # 曲率测量基线 m：用弧长相距 ±0.15m 两点估曲率。
-                            # 必须 ≫ path_spacing，否则栅格阶梯抖动=假曲率→过弯被压成爬行
-goal_tolerance: 0.5         # 到达判定距离 m（只判距离不判航向）。到点不停→调小；
-                            # 终点附近墨迹→调大
-goal_snap_dist: 1.0         # A* 子目标落在障碍格时的螺旋吸附半径 m。
-                            # 应 ≥ inflation_radius 才有逃生能力（射线截断已兜底，此为双保险）
-# 子目标扇形选取（终点模式专用，沿路模式不读）
-# 中心方向被障碍截断时展开扇形候选，打分选优。
-# subgoal_fan_half_deg=0 + subgoal_clearance=0 → 选取行为退回旧版单射线
-subgoal_fan_half_deg: 90.0   # 扇形半角 deg；0=关闭扇形，退回单射线
-subgoal_fan_step_deg: 5.0    # 扇形角步长 deg
-subgoal_align_w: 3.0         # 终点对齐权重 cos(θ-θ_goal)；必须 > subgoal_free_w
-subgoal_free_w: 1.0          # 饱和自由距离权重（饱和参考 = subgoalMin()）
-subgoal_prev_w: 1.0          # 上帧方向一致性权重；0=关闭滞后（防翻烧饼）
-subgoal_clearance: 0.3       # 截断时子目标与膨胀带边缘的净空 m；0=复现旧行为
-                              # 约等于 obstacle_cost_sigma，让子目标自带净空
-                              # 不与 A* 的障碍软代价在路径末段对打
-goal_clear_radius: 0.0        # 终点清洞半径 m；0=关闭（终点贴墙场景才需要）
-                              # 注意：清洞半径 < inflation_radius 时，终点周边会被膨胀带
-                              # 围成孤岛，A* 反而无解；要真让“贴墙终点”可达，
-                              # 须设 goal_clear_radius ≥ inflation_radius
-plan_freq: 10.0             # 规划频率 Hz。反应延迟 ≈ 1/freq + 控制周期，高速时可调高
+# ── 4. 滚动时域规划（子目标距离 / 扇形选向 / 路径采样）──
+plan_freq: 10.0             # 规划频率 Hz（反应延迟 ≈ 1/freq + 控制周期）
+lookahead_ratio: 0.6        # 前瞻距离 = 0.6 × 20 = 12m（路径最大长度上界）
+subgoal_min_ratio: 0.10     # 子目标最小距离 = 0.10 × 20 = 2.0m（下限保护）
+path_spacing: 0.05          # 路径等距重采样间距 m（≈ 栅格分辨率一半）
+curvature_baseline: 0.30    # 曲率测量基线 m（必须 ≫ path_spacing，防阶梯假曲率）
+goal_tolerance: 0.5         # 到达判定距离 m（只判距离不判航向）
+goal_snap_dist: 1.0         # 子目标落障碍格时的螺旋吸附半径 m（应 ≥ inflation_radius）
+goal_clear_radius: 0.0      # 终点清洞半径 m；0=关闭。
+                            # 须 ≥ inflation_radius 才能真让贴墙终点可达
+# 子目标扇形选取（中心方向被截断时展开候选打分选优）
+subgoal_fan_half_deg: 90.0  # 扇形半角 deg；0=关闭扇形退回单射线
+subgoal_fan_step_deg: 5.0   # 扇形角步长 deg
+subgoal_align_w: 3.0        # 终点对齐权重 cos(θ−θ_goal)；必须 > subgoal_free_w
+subgoal_free_w: 1.0         # 饱和自由距离权重
+subgoal_prev_w: 1.0         # 上帧方向一致性权重；0=关闭
+subgoal_clearance: 0.3      # 截断时子目标与膨胀带边缘净空 m；0=复现旧行为
 
-# ── A* 搜索（astar.h/cpp 保留，但 nav_core 不再调用；unknown_cost / obstacle_cost_* 保留供 astar 单测）──
-unknown_cost: 1.4           # 穿越 unknown 格的代价倍率（>1 偏向已知自由区）。
-                            # 路径爱从陌生区抄近路→调大；太保守不敢探索→调小到 1.0
-# 障碍距离软代价（批次2）：单格代价 step×(1+k·exp(-d/σ))，d=该格到最近障碍距离。
-# 路径流向通道中央、离墙更远、更平滑（ROS costmap cost_scaling 同款）。代价因子恒 ≥1
-# → 不破坏 A* 最优性。启用后可把下方 inflation_radius 调薄（软梯度替代厚膨胀带）。
-obstacle_cost_k: 1.0        # 强度。0=关（代码默认，零开销）；1.0=墙边代价≈2×、3σ外→1×
-obstacle_cost_sigma: 0.35   # 衰减尺度 m（≈想额外保持的离墙净空）。截断半径=3σ，超出视为远
+# ── 5. 链式前瞻 + 曲线拟合（终点模式增强，与沿路模式共用代码）──
+# "看多深"扇形选方向，"走多近"定每跳落点，跳点串成 Catmull-Rom 样条控制点。
+# 终点模式额外加 goal_align_w × cos(射线−子目标方向) 偏向目标方向。
+chain_hops: 2               # 跳点数 1..16；1=退化单跳（走直线不拟合）
+road_step_dist: 100.0       # 走多近·固定米 m；给大值=不额外限制
+road_step_ratio: 1.0        # 走多近·比例 (0,1]×看多深；1.0=走到末端（旧行为）
+chain_ema_alpha: 0.3        # κ 跨帧 EMA (0,1]；大=快响应但抖
+goal_align_w: 1.0           # 链式打分偏向子目标方向；0=不偏向；建议 1.0~2.0
+curve_fit_enable: true      # false=完全恢复直线路径行为
 
-# ── 速度规划（制动包络：v 必须能在 (s - 反应距离 - 安全距离) 内刹住）──
-safety_margin: 0.3         # 制动包络附加安全距离 m：调大=更早减速，更保守
-t_reaction: 0.1             # 反应时间 s：包络先扣 v×t_reaction 再算刹车距离（规划周期延迟补偿）
-kappa_max: 0.0              # 最大曲率硬门限 1/m，0=关闭。差速底盘能原地转，默认关；
-                            # 只有阿克曼底盘或禁止原地打方向的平台才设正值
-dk_max: 50.0                # 最大曲率变化率 1/(m·s)：限制沿路径的打舵速度，调小=拐弯更缓
-
-# ── 卡死 / 脱困（判"推进量"不判"位移量"：振荡零进展也能抓住）──
-stuck_time: 5.0             # 判定时长 s：这么久内朝终点推进 < stuck_dist → RECOVERY
-stuck_dist: 0.1             # 推进阈值 m：必须 < 正常绕行的单窗口推进量，否则绕行被误判
-recovery_max_retry: 3       # RECOVERY 重试上限，超过 → ABORT 停车交还决策权
-
-# ── 控制器（PurePursuitController，controller.h）──
-pursuit_lookahead: 0.8      # 纯跟踪前视点沿路径的距离 m。调小=贴线紧但抖、
-                            # 切内角浅；调大=平滑但拐角切内角深（配合弦碰撞检测自动回退）
-control_freq: 50.0          # 控制环频率 Hz（/cmd_vel）。与 plan_freq 解耦：规划仍 10Hz，
-                            # 但指令按 50Hz 刷新，消除 10Hz 零阶保持的 15~30cm 跟踪滞后。
-                            # 前提：控制层会推算车在规划时刻栅格系下的当前位姿（有 odom 用
-                            # odom 位姿差，无 odom 积分自己发的指令）。<=0 = 不拆环
-cmd_a_max: 3.0              # 线速度指令斜率限幅 m/s²（= 底盘上限，再小更柔）
-cmd_w_dot_max: 6.0          # 角速度指令斜率限幅 rad/s²（0→0.8 曾需要 133ms，比一个旧
-                            # 控制周期还长 → 每条指令都在饱和区）
-
-# ── 沿路模式（无定位，路线 A：两侧路缘/墙夹出的走廊即道路）──
-# 默认关闭 → 终点导航行为逐字节不变。启用见独立副本 config/nav_params_road.yaml
-# （road_follow.launch 用它）。开启后 NavCore 不再读 vehicle_pose/goal，改从道路走廊
-# 几何（road_follow.h 前向半球扇形扫描）直接推车体系前瞻子目标 → 无定位沿路行驶。
-follow_road: false          # true=道路前瞻子目标（无定位）；false=原终点投影（默认）
-road_fan_half_deg: 75.0     # 车头前向半球扫描半角 deg（θ=0 正前方）
+# ── 6. 沿路模式（无定位，走廊即道路）──
+# 本文件为终点模式配置，follow_road=false。
+# 沿路模式使用独立副本 nav_params_road.yaml（road_follow.launch 加载它）。
+follow_road: false          # true=沿路模式（不读 pose/goal）；false=终点导航
+road_fan_half_deg: 75.0     # 车头前向半球扫描半角 deg
 road_fan_step_deg: 3.0      # 扇形角步长 deg
-road_lookahead_ratio: 0.35  # 沿路前瞻 = ratio×sensor_range
-road_free_w: 2.0            # 打分权重：前方自由距离（越空越想走 → 弯道偏向外侧长边）。必须 > road_align_w
-road_align_w: 1.0           # 打分权重：车头对齐 cosθ（越想直行 → 抑制摆动）
+road_lookahead_ratio: 0.35  # 沿路前瞻（看多深基准）= ratio×perception_range
+lookahead_speed_k: 0.0      # 看多深·速度增益 s：L(v)=基准 + k×v，上限 perception_range；0=不随速度（零回归）
+road_free_w: 2.0            # 自由距离权重（必须 > road_align_w）
+road_align_w: 1.0           # 车头对齐权重
 
-# ── 链式前瞻 + 曲线拟合（两种模式共用）──
-# "看多深"扇形选方向，"走多近"= min(road_step_dist, road_step_ratio×看多深) 定每跳落点，
-# 跳点串成 Catmull-Rom 样条控制点（曲线经过 O→P1→P2→…）+ 前方曲率 κ（左正右负）。
-# 终点模式额外加 goal_align_w × cos(射线−子目标方向) 打分项，偏向目标方向。
-chain_hops: 2               # 点数 1..16；1=退化单跳（走直线不拟合）
-road_step_dist: 100.0       # 走多近·固定米；给大值=不额外限制
-road_step_ratio: 1.0        # 走多近·比例 (0,1]；1.0=走到看多深末端（旧行为，零回归）
-chain_ema_alpha: 0.3        # κ 跨帧 EMA 系数 (0,1]；扇形量化有噪声，大=快但抖
-goal_align_w: 1.0           # 终点模式链式打分：子目标方向对齐权重；0=不偏向（沿路模式默认）
-                            # 终点模式建议 1.0~2.0；走廊弯曲时与 free_w 自然平衡
-curve_fit_enable: true      # false=完全恢复直线路径行为（实验开关）
+# ── 7. 速度规划（制动包络：v 必须能在视距内刹住）──
+safety_margin: 0.3          # 附加安全距离 m：调大=更早减速
+t_reaction: 0.1             # 反应时间 s（规划周期延迟补偿）
+kappa_max: 0.0              # 最大曲率硬门限 1/m；0=关闭（差速可原地转）
+dk_max: 50.0                # 最大曲率变化率 1/(m·s)：调小=拐弯更缓
+
+# ── 8. 卡死 / 脱困（判推进量不判位移，振荡零进展也能抓住）──
+stuck_time: 5.0             # 判定时长 s：这么久内推进 < stuck_dist → RECOVERY
+stuck_dist: 0.1             # 推进阈值 m（须 < 正常绕行单窗口推进量）
+recovery_max_retry: 3       # 重试上限，超过 → ABORT 停车交还决策权
+
+# ── 9. 控制器（PurePursuitController）──
+pursuit_lookahead: 0.8      # 纯跟踪前视点距离 m。小=贴线紧但抖，大=平滑但切内角
+control_freq: 50.0          # 控制环频率 Hz（与 plan_freq 解耦）。<=0=不拆环
+cmd_a_max: 3.0              # 线速度指令斜率限幅 m/s²
+cmd_w_dot_max: 6.0          # 角速度指令斜率限幅 rad/s²
+
+# ── 10. A* 搜索（astar.h/cpp 保留供独立模块与单测，NavCore 当前不调用）──
+unknown_cost: 1.4           # 穿越 unknown 格代价倍率（>1 偏向已知自由区）
+obstacle_cost_k: 1.0        # 障碍距离软代价强度；0=关
+obstacle_cost_sigma: 0.35   # 衰减尺度 m（≈想额外保持的离墙净空）

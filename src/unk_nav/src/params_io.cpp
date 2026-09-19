@@ -27,8 +27,8 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"a_decel_max", kDouble, &p->a_decel_max},
       {"a_lat_max", kDouble, &p->a_lat_max},
       {"robot_radius", kDouble, &p->robot_radius},
-      // 感知尺度
-      {"sensor_range", kDouble, &p->sensor_range},
+      // 感知范围
+      {"perception_range", kDouble, &p->perception_range},
       // 栅格预处理
       {"inflation_radius", kDouble, &p->inflation_radius},
       {"footprint_clear_radius", kDouble, &p->footprint_clear_radius},
@@ -72,6 +72,7 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"road_fan_half_deg", kDouble, &p->road_fan_half_deg},
       {"road_fan_step_deg", kDouble, &p->road_fan_step_deg},
       {"road_lookahead_ratio", kDouble, &p->road_lookahead_ratio},
+      {"lookahead_speed_k", kDouble, &p->lookahead_speed_k},
       {"road_free_w", kDouble, &p->road_free_w},
       {"road_align_w", kDouble, &p->road_align_w},
       // 链式前瞻 + 曲线拟合（两种模式共用）
@@ -173,6 +174,8 @@ bool loadNavParams(const std::string& yaml_path, NavParams* out,
     problems.push_back("chain_ema_alpha must be in (0, 1]");
   if (out->goal_align_w < 0.0)
     problems.push_back("goal_align_w must be >= 0");
+  if (out->lookahead_speed_k < 0.0)
+    problems.push_back("lookahead_speed_k must be >= 0 (0 = speed-independent lookahead)");
 
   if (!problems.empty()) {
     if (err != nullptr) {

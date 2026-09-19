@@ -124,8 +124,8 @@ public:
     ctrl_timer_ = nh.createTimer(ros::Duration(ctrl_dt_), &NavNode::controlCb, this);
 
     ROS_INFO("[nav_node] 启动：plan_freq=%.1fHz control_freq=%.1fHz, "
-             "sensor_range=%.1fm, v_max=%.2fm/s w_max=%.2frad/s",
-             params_.plan_freq, 1.0 / ctrl_dt_, params_.sensor_range, params_.v_max,
+             "perception_range=%.1fm, v_max=%.2fm/s w_max=%.2frad/s",
+             params_.plan_freq, 1.0 / ctrl_dt_, params_.perception_range, params_.v_max,
              params_.w_max);
   }
 

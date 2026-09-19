@@ -27,7 +27,7 @@
       可选加权 `f=g+w·h`（`astar_w`，默认 1.0=关，1.05 次优 ≤1.05×）。已落地：`astar.cpp` 的 `CellCmp`/`Cell`，
       `Workspace.last_iter` 记扩展数，`core_test` 第 12 组回归。
 - [ ] **子目标自适应前瞻**：终点方向越空、子目标放得越远；越 clutter 放得越近（用「沿射线连续 free 长度」定 reach）。
-      改动点：`subgoal.cpp` `project()` 的 `reach` 选择（现固定 `lookahead_ratio×sensor_range`）。
+      改动点：`subgoal.cpp` `project()` 的 `reach` 选择（现固定 `lookahead_ratio×perception_range`）。
 - [ ] **子目标落在 clutter 之前而非之上**：`reach` 再夹一个「到射线首个障碍距离 − margin」，减少反复 `subgoal_trunc`。
 
 ### 批次 2 —— 新基础设施、解真痛点（最高价值）
@@ -80,7 +80,7 @@
 以下表格与复现命令来自 A* 阶段：只有局部栅格和远处终点时，凹形障碍会造成局部极小。
 这些历史绕行结果不能作为当前“子目标 + 直线/曲线”版本的能力保证。
 
-分界线是**凹槽深度与前瞻距离（`lookahead_ratio × sensor_range`，默认 4.2 m）的关系**：
+分界线是**凹槽深度与前瞻距离（`lookahead_ratio × perception_range`，默认 4.2 m）的关系**：
 
 | 场景 | 表现 |
 |---|---|
@@ -222,12 +222,17 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, k
 
 ---
 
-## 二·五、链式前瞻与可关闭曲线（两种模式共用）
+## 二·五、接力前瞻（Relay Lookahead, RLA）与可关闭曲线（两种模式共用）
+
+> **命名**：本节这套“看远·走近·接力 n 跳”的规划机制正式名为 **接力前瞻（Relay Lookahead, RLA）**，
+> 旧称“链式前瞻”，代码入口 `road::lookAheadChain`。三个动作分属两个时间尺度：
+> **帧内**把短步落点接力成 hops 链（一次 `plan()` 内），**帧间**每周期在新车位重跑整条链（滚动重规划，即 MPC 的 receding-horizon 原理）。
+> 它的灵魂是把“看多深”（选向视野）与“走多近”（落点步长）**解耦**为两个正交量。
 
 ### 保留第一跳，额外估计方向
 
 沿路模式 `follow_road=true` 不依赖全局终点和定位来选择子目标。第一跳仍以车头 `+x` 为中心，
-在 ±`road_fan_half_deg` 内扫描，单跳长度 `L = road_lookahead_ratio × sensor_range`，
+在 ±`road_fan_half_deg` 内扫描，单跳长度 `L = road_lookahead_ratio × perception_range`，
 按 `road_free_w·min(d,L)/L + road_align_w·cosθ` 评分。射线每半个栅格分辨率检查一次，遇占据/越界截断。
 这只是在选自由空间方向，不保证处于道路中央或能绕过所有障碍。
 
@@ -242,6 +247,10 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, k
 
 - **看多深 ≠ 走多近**：扫描视野 `L` 决定"往哪个方向探"（看得远才不短视），走多近决定"跳点放多密"。
   默认 `road_step_ratio=1.0` → 走多近 `=L` → 落点即射线末端（旧行为，零回归）；调小则跳点变密、曲线更贴走廊。
+- **看多深可随速度变（可选）**：`L(v) = min(road_lookahead_ratio×perception_range + lookahead_speed_k·v, perception_range)`，
+  即“越快越往远看”（高速提前预见弯道，与曲率限速形成正反馈：直道高速→看远→早发弯道→早降速→看近→跳点密→灵活过弯）。
+  `lookahead_speed_k=0`（默认）时 `L` 与速度无关，逐字节零回归。上限夹到 `perception_range`（再远无观测信息）。
+  注：因 `走多近 = min(road_step_dist, road_step_ratio×L)`，`L` 变大会使走多近（比例那一路）被动变大，直到 `road_step_dist` 夹住。
 - `kappa_est = Σ相邻射线转角 / Σ前一跳前进量`，左正右负。这些长度是射线段长度，不是真实道路弧长。
 - `NavCore` 仅对 `kappa_est` 做 EMA（诊断 / 状态文本用）；首次有效链直接初始化。
 - 另保留 `tangent_end = β + clamp(δ₂/2, ±30°)`（`β` 第一跳弦向、`δ₂` 第二跳相对转角）作为**纯诊断量**（早期 Hermite 拟合的终点切向），当前样条不再使用它。
@@ -269,6 +278,7 @@ NavResult{ path(base_link), recommended_speed, state, emergency_stop, subgoal, k
 | `chain_hops` | `2` | 点数，范围 1..16；1 退化单跳（走直线不拟合）；≥2 跳点作为样条控制点，曲线长 ≈ 跳数 × 走多近 |
 | `road_step_dist` | `1e9`（road 配置 `1.5`）| 走多近·固定米 m；每跳落点沿选中方向最多前进这么远 |
 | `road_step_ratio` | `1.0`（road 配置 `0.3`）| 走多近·比例 (0,1]，× 看多深 `L`；实际走多近 = `min(road_step_dist, road_step_ratio×L)`。`1.0`=射线末端（旧行为）|
+| `lookahead_speed_k` | `0.0` | 看多深·速度增益 s：`L(v)=基准 + k×v`，上限 `perception_range`；`0`=不随速度（零回归）；想高速往远看可试 `2.0~4.0` |
 | `chain_ema_alpha` | `0.3` | 配置范围 (0,1]；实现最低夹到 0.001；越小越平滑但滞后，1 表示不混合历史 |
 | `goal_align_w` | `0.0`（终点配置 `1.0`）| 终点模式链式打分：子目标方向对齐权重；0=不偏向（沿路默认）；终点模式建议 1.0~2.0 |
 
@@ -361,10 +371,10 @@ catkin_make -j2 -l2
 ./unk_nav_demo --config ../config/nav_params.yaml  # 用与仿真/实车同一份 YAML（推荐）
 ./unk_nav_demo --config ... --goal 30 5            # 指定远处终点
 ./unk_nav_demo --config ... --obs 5 -4 5.4 4       # 加矩形障碍 x0 y0 x1 y1（可重复多次）
-./unk_nav_demo --range 30                          # 显式覆盖配置里的 sensor_range（换实车尺度：窗口 51m、约 104 万格）
+./unk_nav_demo --range 30                          # 显式覆盖配置里的 perception_range（换实车尺度：窗口 51m、约 104 万格）
 ```
 
-`--config` 不传则 `NavParams` 用 `types.h` 里的代码默认值；`--range` 无论是否配 `--config` 都会覆盖 `sensor_range`（其他值仍走配置或默认）。
+`--config` 不传则 `NavParams` 用 `types.h` 里的代码默认值；`--range` 无论是否配 `--config` 都会覆盖 `perception_range`（其他值仍走配置或默认）。
 
 输出：终端进度 + 耗时统计 + ASCII 轨迹图 + `trajectory.csv`。
 
@@ -480,22 +490,24 @@ A\* 出的是栅格阶梯，LOS 拉直后剩尖角折线。直接交给速度规
 
 参数以**实际加载的配置文件**为准：终点模式 [`config/nav_params.yaml`](config/nav_params.yaml)，沿路模式 [`config/nav_params_road.yaml`](config/nav_params_road.yaml)。仿真由 `config_file` 指定，离线 demo 由 `--config` 指定；缺省键保留 `types.h::NavParams` 默认值。新增参数须同步字段、`params_io.cpp` 绑定表和相应 YAML，未知键会报错。
 
-当前 `NavCore` 不读取 A* 的 `unknown_cost`、`obstacle_cost_*` 等软代价参数，也不调用 `path_smooth` 的 `smooth_*` 参数。保留这些配置是为了独立模块使用，不代表调整它们能改变当前沿路行为。链式/曲线参数及回退见「二·五」。下面关于搜索、倒角或吸附的说明属于历史模块设计。
+当前 `NavCore` 不读取 A* 的 `unknown_cost`、`obstacle_cost_*` 等软代价参数。保留这些配置是为了独立模块使用与单测，不代表调整它们能改变当前规划行为。链式/曲线参数及回退见「二·五」。下面关于搜索、倒角或吸附的说明属于历史模块设计。
 
 ### 无量纲化原则
 
-所有与**感知尺度**相关的距离都表达为 `sensor_range` 的比例：
+所有与**感知范围**相关的距离都表达为 `perception_range` 的比例：
 
 ```
-局部窗口  = 1.7  × sensor_range     (仿真 20.4 m ← 12 m；实车 51 m ← 30 m)
-前瞻距离  = 0.35 × sensor_range     (lookahead_ratio)
-子目标下限 = 0.10 × sensor_range     (subgoal_min_ratio，前瞻的下限保护)
+局部窗口  = 1.7  × perception_range     (仿真 20.4 m ← 12 m；实车 51 m ← 30 m)
+前瞻距离  = 0.35 × perception_range     (lookahead_ratio)
+子目标下限 = 0.10 × perception_range     (subgoal_min_ratio，前瞻的下限保护)
 ```
 
-换车型 / 换雷达只改 `sensor_range` 一个值，整定结果按比例自动迁移。
+换车型 / 换感知源只改 `perception_range` 一个值，整定结果按比例自动迁移。
 
-**但动力学参数不参与这个缩放**：`inflation_radius`、`smooth_corner_speed`、`a_decel_max`、
-`a_lat_max`、`w_max` 由车辆本身决定，换雷达不该改变过弯半径。
+> **命名沿革**：本参数旧名 `sensor_range`（早期无上游信息时只能自仿真一个激光雷达量程），现上游已直接给出确定的感知栅格地图，故改名 `perception_range`（仅作其尺度基准）。YAML 键已同步，旧键 `sensor_range` 不再被识别。
+
+**但动力学参数不参与这个缩放**：`inflation_radius`、`a_decel_max`、
+`a_lat_max`、`w_max` 由车辆本身决定，换感知源不该改变过弯半径。
 
 ### 以米为单位、不以格数为单位
 

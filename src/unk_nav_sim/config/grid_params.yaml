@@ -17,7 +17,7 @@ base_frame: base_link             # 目标坐标系（栅格输出在此系下�
 # ── 栅格几何 ──
 # 格数 = (window_size/resolution)²，内存和每帧耗时都按这个平方增长
 resolution: 0.1                   # 栅格分辨率 m/格。要 ≤ 膨胀半径的一半，否则膨胀圈锯齿明显
-window_size: 34.0                 # 局部窗口边长 m（= 1.7 × sensor_range）。
+window_size: 34.0                 # 局部窗口边长 m（= 1.7 × perception_range）。
                                   # 车在中心，前后各覆盖 window/2 = 17m
 
 # ── 点云过滤 ──

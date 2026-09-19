@@ -13,7 +13,7 @@
 //   ./unk_nav_demo --obs 5 -3 6 3           # 加一个矩形障碍（可多次），看绕行
 //   ./unk_nav_demo --range 30               # 换实车尺度雷达，窗口自动变 51m（约 100 万格）
 //   ./unk_nav_demo --config ../config/nav_params.yaml   # 用与仿真/实车同一份 YAML 配置
-//                                     # （不传 --config 则用代码默认值；--range 会覆盖配置里的 sensor_range）
+//                                     # （不传 --config 则用代码默认值；--range 会覆盖配置里的 perception_range）
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -47,9 +47,9 @@ struct World {
 };
 
 // 渲染以车为中心的 window×window 局部栅格（车体系）。
-// 超出 sensor_range 的格子标为 unknown —— 这正是「环境未知」的来源。
+// 超出 perception_range 的格子标为 unknown —— 这正是「环境未知」的来源。
 unk::GridMap renderLocalGrid(const World& w, const unk::Pose2D& veh, double window,
-                             double res, double sensor_range) {
+                             double res, double perception_range) {
   unk::GridMap g;
   g.resolution = res;
   g.width = g.height = static_cast<int>(std::round(window / res));
@@ -57,7 +57,7 @@ unk::GridMap renderLocalGrid(const World& w, const unk::Pose2D& veh, double wind
   g.data.resize(static_cast<size_t>(g.width) * static_cast<size_t>(g.height), unk::kFree);
 
   const double c = std::cos(veh.yaw), s = std::sin(veh.yaw);
-  const double r2 = sensor_range * sensor_range;
+  const double r2 = perception_range * perception_range;
   for (int gy = 0; gy < g.height; ++gy) {
     for (int gx = 0; gx < g.width; ++gx) {
       const double bx = g.origin_x + (gx + 0.5) * res;
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
   // ---- 参数解析 ----
   unk::Point2D goal{30.0, 5.0};
   World world;
-  double sensor_range = 12.0;
+  double perception_range = 12.0;
   bool range_given = false;
   std::string config;  // 空 = 用代码默认参数；非空 = 从 YAML 加载（与仿真同一份）
   for (int i = 1; i < argc; ++i) {
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
       goal.x = std::atof(argv[++i]);
       goal.y = std::atof(argv[++i]);
     } else if (a == "--range" && i + 1 < argc) {
-      sensor_range = std::atof(argv[++i]);  // 用于实测实车尺度（30m 雷达 → 51m 窗口）
+      perception_range = std::atof(argv[++i]);  // 用于实测实车尺度（30m 雷达 → 51m 窗口）
       range_given = true;
     } else if (a == "--config" && i + 1 < argc) {
       config = argv[++i];
@@ -249,8 +249,8 @@ int main(int argc, char** argv) {
     }
     std::printf("[demo] 已加载配置：%s\n", config.c_str());
   }
-  if (range_given) p.sensor_range = sensor_range;  // 命令行显式指定优先级最高
-  const double kWindow = 1.7 * p.sensor_range;  // 无量纲化：窗口 = 1.7 × 雷达量程
+  if (range_given) p.perception_range = perception_range;  // 命令行显式指定优先级最高
+  const double kWindow = 1.7 * p.perception_range;  // 无量纲化：窗口 = 1.7 × 雷达量程
   const double kRes = 0.05;
 
   unk::NavCore nav(p);
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
   std::printf("unk_nav demo：终点 (%.1f, %.1f)，直线距离 %.1f m，障碍 %zu 个\n", goal.x,
               goal.y, std::hypot(goal.x, goal.y), world.obstacles.size());
   std::printf("雷达量程 %.1fm  窗口 %.1fm  栅格 %d×%d = %.2f 万格  分辨率 %.2fm\n",
-              p.sensor_range, kWindow, static_cast<int>(kWindow / kRes),
+              p.perception_range, kWindow, static_cast<int>(kWindow / kRes),
               static_cast<int>(kWindow / kRes), kWindow * kWindow / (kRes * kRes) / 1e4, kRes);
   std::printf("前瞻 %.1fm  v_max %.2f m/s\n\n", p.lookahead(), p.v_max);
 
@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
     const auto tr0 = std::chrono::steady_clock::now();
     unk::NavInput in;
     in.now = t;
-    in.local_grid = renderLocalGrid(world, veh, kWindow, kRes, p.sensor_range);
+    in.local_grid = renderLocalGrid(world, veh, kWindow, kRes, p.perception_range);
     in.vehicle_pose = veh;
     in.goal = goal;
     in.goal_valid = true;

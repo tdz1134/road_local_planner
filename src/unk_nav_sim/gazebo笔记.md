@@ -346,15 +346,15 @@ Velodyne 安装在 base_link 上方 0.3m，垂直 FOV 覆盖：
 
 ---
 
-## 十、unk_nav 参数换算（sensor_range=12m）
+## 十、unk_nav 参数换算（perception_range=12m）
 
-unk_nav 的所有规划距离按 `sensor_range` 无量纲化：
+unk_nav 的所有规划距离按 `perception_range`（旧名 sensor_range）无量纲化：
 
 | 参数 | 比例 | 12m 对应值 |
 |------|------|-----------|
-| `local_window` | 1.7 × sensor_range | **20.4 m** |
-| `lookahead_dist` | 0.35 × sensor_range | **4.2 m** |
-| `subgoal_dist` | 0.6 × sensor_range | **7.2 m** |
+| `local_window` | 1.7 × perception_range | **20.4 m** |
+| `lookahead_dist` | 0.35 × perception_range | **4.2 m** |
+| `subgoal_dist` | 0.6 × perception_range | **7.2 m** |
 | `goal_snap_dist` | 当前 0.5m（已知偏小）| 建议改为 **1.0 m** |
 
 > **d1snap bug**：goal_snap_dist=0.5m < 0.66m（障碍物膨胀带宽度的1/2），  

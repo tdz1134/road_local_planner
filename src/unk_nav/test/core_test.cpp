@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -457,7 +458,7 @@ void testAstar() {
 
 void testSubgoal() {
   group("subgoal");
-  unk::NavParams p;  // sensor_range=12 → lookahead=4.2, subgoalMin=1.2
+  unk::NavParams p;  // perception_range=12 → lookahead=4.2, subgoalMin=1.2
 
   const unk::GridMap g = makeGrid(20.0, 0.05, unk::kFree);  // ±10m 窗口
 
@@ -520,7 +521,7 @@ void testRoadFollow() {
   group("road_follow");
   unk::NavParams p;
   p.follow_road = true;
-  p.sensor_range = 12.0;  // roadLookahead = 0.35*12 = 4.2
+  p.perception_range = 12.0;  // roadLookahead = 0.35*12 = 4.2
   const double L = p.roadLookahead();
   const double W = 20.0, half = W / 2;
 
@@ -597,7 +598,7 @@ void testRoadChain() {
   group("road_follow 链式前瞻");
   unk::NavParams p;
   p.follow_road = true;
-  p.sensor_range = 12.0;  // roadLookahead = 4.2
+  p.perception_range = 12.0;  // roadLookahead = 4.2
   // 走廊半宽取 1.5：保证第 1 跳直行射线仍全自由（bearing≈0），而第 2 跳的直行
   // 射线会在前瞻内被弯道下沿截短 → 擦边射线胜出 → 量出 θ₂' > 0。
   // （走廊更宽时所有射线都自由，扇形量不到曲率 —— 这是方法的适用边界。）
@@ -692,6 +693,34 @@ void testRoadChain() {
     for (int i = 0; i < chain.hop_count; ++i)
       if (!corr.feasibleAt(chain.hops[i].x, chain.hops[i].y)) all_free = false;
     check(all_free, "走多近遇墙：所有跳点均落在自由区（不冲进障碍）");
+  }
+
+  // 看多深随速度（lookahead_speed_k）：单元级 L(v) + 行为级 reach 随速度增长
+  {
+    const double kNaN = std::numeric_limits<double>::quiet_NaN();
+    // 单元级：k=0 零回归；k>0 线性增；上限夹到 perception_range
+    unk::NavParams pz = p;
+    pz.perception_range = 12.0;
+    pz.road_lookahead_ratio = 0.35;  // 基准 L = 4.2
+    pz.lookahead_speed_k = 0.0;
+    checkNear(pz.roadLookahead(0.0), 4.2, 1e-9, "看多深·k=0：v=0 → 基准 4.2");
+    checkNear(pz.roadLookahead(5.0), 4.2, 1e-9, "看多深·k=0：v=5 仍 4.2（零回归）");
+    unk::NavParams pk = p;
+    pk.perception_range = 12.0;
+    pk.road_lookahead_ratio = 0.35;  // 基准 4.2
+    pk.lookahead_speed_k = 2.0;      // 每 m/s +2m
+    checkNear(pk.roadLookahead(0.0), 4.2, 1e-9, "看多深·k=2：v=0 → 基准 4.2");
+    checkNear(pk.roadLookahead(3.0), 10.2, 1e-9, "看多深·k=2：v=3 → 4.2+6=10.2");
+    checkNear(pk.roadLookahead(10.0), 12.0, 1e-9, "看多深·k=2：v=10 → 夹到 perception_range 12");
+
+    // 行为级：开阔直廊，落点=看多深 L（road_step_ratio=1.0），故高速 reach 更大
+    const unk::GridMap open = makeGrid(40.0, 0.05, unk::kFree);
+    const auto r0 = unk::road::lookAheadChain(open, pk, 0.0, kNaN, 0.0);
+    const auto r1 = unk::road::lookAheadChain(open, pk, 0.0, kNaN, 3.0);
+    check(r0.valid && r1.valid, "看多深随速度：链有效");
+    checkNear(r0.reach, 4.2, 0.15, "看多深随速度：v=0 reach≈4.2");
+    checkNear(r1.reach, 10.2, 0.15, "看多深随速度：v=3 reach≈10.2（看更远）");
+    check(r1.reach > r0.reach + 3.0, "看多深随速度：高速前瞻明显更远");
   }
 }
 
@@ -939,7 +968,7 @@ void testFsm() {
 void testNavCore() {
   group("nav_core 端到端");
   unk::NavParams p;
-  const double kWindow = 1.7 * p.sensor_range;
+  const double kWindow = 1.7 * p.perception_range;
 
   auto makeInput = [&](const unk::GridMap& grid, const unk::Pose2D& veh,
                        const unk::Point2D& goal, double t, double spd) {
@@ -1022,9 +1051,9 @@ void testNavCoreRoad() {
   group("nav_core 沿路模式");
   unk::NavParams p;
   p.follow_road = true;
-  p.sensor_range = 12.0;
+  p.perception_range = 12.0;
   p.stuck_time = 3.0;
-  const double W = 1.7 * p.sensor_range;  // 20.4
+  const double W = 1.7 * p.perception_range;  // 20.4
   const double half = W / 2;
 
   auto makeRoadInput = [&](const unk::GridMap& grid, double t, double spd) {
@@ -1079,7 +1108,7 @@ void testNavCoreRoadCurve() {
   group("nav_core 沿路曲线路径");
   unk::NavParams p;
   p.follow_road = true;
-  p.sensor_range = 12.0;
+  p.perception_range = 12.0;
   p.inflation_radius = 0.5;       // 走廊半宽 2.0 - 膨胀 0.5 = 有效 1.5 → 扇形可感弯
   p.footprint_clear_radius = 0.3;
   p.stuck_time = 3.0;
@@ -1298,7 +1327,7 @@ void testParamsIo() {
   check(p.recovery_max_retry == 5, "int 读入");
   check(p.inflate_unknown == true, "bool 读入");
   checkNear(p.pursuit_lookahead, 0.9, 1e-12, "控制器参数同表读入");
-  checkNear(p.sensor_range, unk::NavParams().sensor_range, 1e-12, "未写字段保持默认");
+  checkNear(p.perception_range, unk::NavParams().perception_range, 1e-12, "未写字段保持默认");
 
   // 未知 key → 拒绝（拼错的参数名绝不能静默失效）
   {

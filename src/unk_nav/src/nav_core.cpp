@@ -123,10 +123,14 @@ NavResult NavCore::plan(const NavInput& in) {
   if (p_.follow_road) {
     // 无定位：不读 in.goal / in.vehicle_pose，前进方向以车头（base 系 +x）为基准。
     if (!work_grid_.empty()) {
-      // 链式前瞻：第 1 跳与单跳完全一致，额外量出落点切向与前方曲率；
+      // 接力前瞻：第 1 跳与单跳完全一致，额外量出落点切向与前方曲率；
       // 曲线拟合关闭时不做链（省算力，行为与旧版逐字节一致）。
-      road::Result rr = p_.curve_fit_enable ? road::lookAheadChain(work_grid_, p_)
-                                            : road::lookAhead(work_grid_, p_);
+      // in.current_speed 仅用于“看多深”随速度放大（lookahead_speed_k=0 时不生效）。
+      road::Result rr =
+          p_.curve_fit_enable
+              ? road::lookAheadChain(work_grid_, p_, 0.0,
+                                     std::numeric_limits<double>::quiet_NaN(), in.current_speed)
+              : road::lookAhead(work_grid_, p_, in.current_speed);
       sg.valid = rr.valid;
       sg.point = rr.point;
       sg.reach = rr.reach;
@@ -144,7 +148,7 @@ NavResult NavCore::plan(const NavInput& in) {
                           have_last_bearing_ ? &last_subgoal_bearing_ : nullptr);
     // 终点模式链式前瞻：用 goal_bearing 偏向子目标方向，得到跳点供样条拟合。
     if (sg.valid && p_.curve_fit_enable) {
-      road::Result rr = road::lookAheadChain(work_grid_, p_, 0.0, goal_bearing);
+      road::Result rr = road::lookAheadChain(work_grid_, p_, 0.0, goal_bearing, in.current_speed);
       absorbChain(rr);
     }
   }

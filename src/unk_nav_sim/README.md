@@ -221,7 +221,7 @@ cmd.angular.z = tc.w;
 | `/unk_nav/work_grid` | nav_msgs/OccupancyGrid | nav_node 发布 | 调试：膨胀并清理足迹后的工作栅格，用于选点、曲线检查与限速复查 |
 | `/unk_nav/fan_candidates` | visualization_msgs/Marker | nav_node 发布 | 调试：子目标扇形展开的候选 |
 | `/unk_nav/goal_marker` | visualization_msgs/Marker | nav_node 发布 | 调试：当前车体系子目标（绿色圆柱） |
-| `/unk_nav/chain` | visualization_msgs/MarkerArray | nav_node 发布 | 调试：链式前瞻可视化——接力折线（原点→P1→P2→P3）+ 跳点球 + 最远跳点出射方向箭头 + κ/curve 文本；仅沿路模式 `curve_fit_enable=true` 时有内容 |
+| `/unk_nav/chain` | visualization_msgs/MarkerArray | nav_node 发布 | 调试：链式前瞻可视化——接力折线（原点→P1→P2→…）+ 跳点球 + 最远跳点出射方向箭头 + κ/curve 文本；链式前瞻有效时有内容（沿路模式始终启用，终点模式 `curve_fit_enable=true` 时启用） |
 
 ### 电机控制（底层）
 

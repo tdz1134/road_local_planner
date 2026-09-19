@@ -103,7 +103,7 @@ ScanHit scanFan(const GridMap& g, double ox, double oy, double heading,
 
 // ── 公共接口（在 road_follow.h 中声明）───────────────────────────
 
-Result lookAhead(const GridMap& work_grid, const NavParams& p) {
+Result lookAhead(const GridMap& work_grid, const NavParams& p, double current_speed) {
   // 单跳扫描：子目标 = 看多深 L 的满距离落点（不受 road_step_ratio 截断）。
   // 与 lookAheadChain 的区别：不截断第一跳距离、不做接力扫描。
   // 保留独立实现（而非委托 lookAheadChain）：lookAheadChain 会用 step_walk 截断第一跳，
@@ -111,7 +111,7 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p) {
   Result r;
   if (work_grid.empty()) return r;
 
-  const double L = p.roadLookahead();
+  const double L = p.roadLookahead(current_speed);
   if (L <= 1e-6) return r;
   const double step = std::max(0.5 * work_grid.resolution, 1e-6);
 
@@ -132,13 +132,13 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p) {
 }
 
 Result lookAheadChain(const GridMap& work_grid, const NavParams& p,
-                      double start_heading, double goal_bearing) {
+                      double start_heading, double goal_bearing, double current_speed) {
   // 第 1 跳扫描：从 (0,0) 朝 start_heading 方向扫看多深 L，选最优方向。
   // 沿路模式 start_heading=0（车头）；终点模式可传 sg.bearing 偏朝子目标。
   // goal_bearing 非 NAN 时 scanFan 打分额外加 goal_align_w 子目标偏向项。
   Result r;
   if (work_grid.empty()) return r;
-  const double L = p.roadLookahead();
+  const double L = p.roadLookahead(current_speed);
   if (L <= 1e-6) return r;
   const double step = std::max(0.5 * work_grid.resolution, 1e-6);
 

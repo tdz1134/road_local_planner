@@ -143,8 +143,8 @@ inline const char* navStateName(NavState s) {
 }
 
 // 全部可调参数。
-// 注意「无量纲化」原则：所有与感知尺度相关的距离都表达为 sensor_range 的比例，
-// 换车型 / 换雷达时只改 sensor_range 一个值，整定结果按比例自动迁移到实车。
+// 注意「无量纲化」原则：所有与感知范围相关的距离都表达为 perception_range 的比例，
+// 换车型 / 换感知源时只改 perception_range 一个值，整定结果按比例自动迁移到实车。
 struct NavParams {
   // ---- 车辆能力 ----
   double v_max = 0.22;         // 最大线速度 m/s
@@ -153,8 +153,10 @@ struct NavParams {
   double a_lat_max = 1.0;      // 最大横向加速度 m/s^2
   double robot_radius = 0.105; // 车体半径 m
 
-  // ---- 感知尺度（所有规划距离的基准）----
-  double sensor_range = 12.0;  // 激光雷达量程 m
+  // ---- 感知范围（上游给定的局部感知栅格尺度，所有规划距离的基准）----
+  // 旧名 sensor_range：早期无上游信息时只能自仿真一个激光雷达量程而得名。
+  // 现上游已直接给出确定的感知栅格地图，本值仅作其尺度基准，故改名 perception_range。
+  double perception_range = 12.0;  // 感知范围 m
 
   // ---- 栅格预处理 ----
   // 膨胀半径 = 车体半径 + 余量。这个「余量」是给**下游控制器的跟踪误差**留的，
@@ -167,8 +169,8 @@ struct NavParams {
   bool inflate_unknown = false;          // 是否把 unknown 也膨胀成障碍（默认否，保持乐观）
 
   // ---- 滚动时域规划 ----
-  double lookahead_ratio = 0.35;   // 子目标投影距离 = ratio * sensor_range
-  double subgoal_min_ratio = 0.10; // 子目标最小距离 = ratio * sensor_range
+  double lookahead_ratio = 0.35;   // 子目标投影距离 = ratio * perception_range
+  double subgoal_min_ratio = 0.10; // 子目标最小距离 = ratio * perception_range
   double path_spacing = 0.05;      // 路径等距重采样间距 m
   // 曲率测量基线 m：曲率用弧长相距 ±baseline/2 的两点估计，而非相邻点。
   // 必须 > 0，否则曲率会随 path_spacing 变化（点距 0.05m 时栅格阶梯的微小抖动
@@ -256,12 +258,15 @@ struct NavParams {
   bool   follow_road          = false; // true=道路前瞻子目标；false=原终点投影（默认）
   double road_fan_half_deg    = 75.0;  // 车头前向半球扫描半角 deg（θ=0 为正前方 +x）
   double road_fan_step_deg    = 3.0;   // 扇形扫描角步长 deg
-  double road_lookahead_ratio = 0.35;  // 沿路前瞻距离 = ratio * sensor_range
+  double road_lookahead_ratio = 0.35;  // 沿路前瞻距离（看多深基准）= ratio * perception_range
+  double lookahead_speed_k    = 0.0;   // 看多深·速度增益 s：L(v)=基准 + k×v，上限 perception_range。
+                                       // 越大越快越往远看（高速提前预见弯道）；0=关闭（零回归，与旧版逐字节一致）
   double road_free_w          = 2.0;   // 打分权重：前方自由距离（越空越想走）。必须 > road_align_w，
                                        // 否则对齐项 cosθ 过强，车会顶着弯道外墙直到几乎撞上才转
   double road_align_w         = 1.0;   // 打分权重：与车头对齐度 cosθ（越想直行，抑制无谓摆动）
 
-  // ---- 链式前瞻 + 曲线拟合 ----
+  // ---- 接力前瞻（Relay Lookahead, RLA；旧称链式前瞻）+ 曲线拟合 ----
+  // “看远·走近·接力 n 跳”：扇形扫描选向（看远）+ 每跳短步落点（走近）+ 接力 chain_hops 次成链。
   // 单跳扇形扫描只有"弦向"信息；链式前瞻在各跳落点接力再扫，得到一串跳点 hops（供
   // fitSpline 作 Catmull-Rom 样条控制点，曲线经过 O→P1→P2→…）与前方曲率 κ（诊断）。
   // κ 经曲线路径点的 k 字段自动接入 speed_planner 的三条曲率限速（否则直线路径 k≡0 休眠）。
@@ -282,9 +287,17 @@ struct NavParams {
   bool   curve_fit_enable = true;  // false = 完全恢复直线路径行为（实验开关）
 
   // ---- 派生量（勿手工设置）----
-  double lookahead() const { return lookahead_ratio * sensor_range; }
-  double subgoalMin() const { return subgoal_min_ratio * sensor_range; }
-  double roadLookahead() const { return road_lookahead_ratio * sensor_range; }
+  double lookahead() const { return lookahead_ratio * perception_range; }
+  double subgoalMin() const { return subgoal_min_ratio * perception_range; }
+  double roadLookahead() const { return road_lookahead_ratio * perception_range; }
+  // 速度相关的"看多深"：L(v) = min(基准 + lookahead_speed_k·v, perception_range)。
+  // v≤0 或 lookahead_speed_k=0 时退化为基准（零回归）。上限=感知范围（再远无观测信息）。
+  double roadLookahead(double v) const {
+    const double base = roadLookahead();
+    if (lookahead_speed_k <= 0.0 || v <= 0.0) return base;
+    const double l = base + lookahead_speed_k * v;
+    return l < perception_range ? l : perception_range;
+  }
 };
 
 // 单周期输入

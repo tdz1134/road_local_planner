@@ -19,7 +19,10 @@
 // 取 argmax 得 θ*，落点 = min(d(θ*), L) 处。路中有圆柱时正前方 d 被截短、旁边空隙
 // d 更长，θ* 自然偏向空隙 → 绕过后正前方又变最远 → 自动回中。
 //
-// ── 链式前瞻（lookAheadChain）──────────────────────────────────
+// ── 接力前瞻（Relay Lookahead, RLA；旧称链式前瞻，即 lookAheadChain）──
+// 一句话画像：**看远·走近·接力 n 跳**——扇形扫描视野 L 只用来选方向（看远防短视），
+// 每跳落点只沿选中方向前进一小步（走近 = min(road_step_dist, road_step_ratio×L)），
+// 把虚拟车挪到落点接力再扫、重复 chain_hops 次串成 hops 链。帧内接力成链 + 帧间滚动重规划。
 // 单跳扫描只回答"从车这里看哪个方向最空"，落点方向是**弦向**，不含"路接下来往哪弯"。
 // 链式版把扫描接力做 chain_hops 跳：在第 1 跳落点放"虚拟车"（朝向 = 到达方向）再扫，
 // 量出道路在落点处的继续转角 θ₂'：
@@ -55,17 +58,20 @@ struct Result {
 
 // 从膨胀后的工作栅格中，沿车头前向半球选出道路前瞻子目标（单跳）。
 // work_grid：已膨胀 + 已清足迹的工作栅格（与 subgoal::project 的入参一致，车体系）。
+// current_speed：当前车速 m/s，仅用于“看多深”随速度放大（见 NavParams::roadLookahead(v)）；0=不随速度。
 // 失败（栅格空 / 前向全不可行）返回 valid=false。
-Result lookAhead(const GridMap& work_grid, const NavParams& p);
+Result lookAhead(const GridMap& work_grid, const NavParams& p, double current_speed = 0.0);
 
-// 链式前瞻：第 1 跳与 lookAhead 完全一致（零回归），随后接力 chain_hops-1 跳
+// 接力前瞻（Relay Lookahead, RLA；旧称链式前瞻）：第 1 跳与 lookAhead 完全一致（零回归），随后接力 chain_hops-1 跳
 // 估计落点处道路切向（tangent_end）与前方曲率（kappa_est）。链截断时优雅退化。
 // start_heading：第一跳扫描朝向（0=车头，沿路模式默认）；终点模式可传 sg.bearing。
 // goal_bearing：子目标绝对方位角 rad；非 NAN 时打分加 goal_align_w × cos(射线−goal_bearing)。
 //                沿路模式传 NAN（不加子目标项）；终点模式传 sg.bearing 偏向目标。
+// current_speed：当前车速 m/s，只影响“看多深” L=roadLookahead(v)（越快看越远）；0=不随速度（零回归）。
 Result lookAheadChain(const GridMap& work_grid, const NavParams& p,
                       double start_heading = 0.0,
-                      double goal_bearing = std::numeric_limits<double>::quiet_NaN());
+                      double goal_bearing = std::numeric_limits<double>::quiet_NaN(),
+                      double current_speed = 0.0);
 
 }  // namespace road
 }  // namespace unk

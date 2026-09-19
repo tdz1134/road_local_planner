@@ -28,7 +28,7 @@ struct Options {
 // 由目标过弯速度反解倒角半径，同时满足两条运动约束：
 //   角速度     w = v/r <= w_max      →  r >= v/w_max
 //   横向加速度 a = v^2/r <= a_lat_max →  r >= v^2/a_lat_max
-// 这是动力学参数，不随 sensor_range 缩放（换雷达不该改变过弯半径）。
+// 这是动力学参数，不随 perception_range 缩放（换感知源不该改变过弯半径）。
 double filletRadiusForCornerSpeed(double v_corner, double w_max, double a_lat_max);
 
 // 拐点圆弧倒角。圆弧采样点碰撞时半径折半重试，仍碰撞则保留尖角。
