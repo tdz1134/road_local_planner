@@ -264,6 +264,9 @@ struct NavParams {
   double road_free_w          = 2.0;   // 打分权重：前方自由距离（越空越想走）。必须 > road_align_w，
                                        // 否则对齐项 cosθ 过强，车会顶着弯道外墙直到几乎撞上才转
   double road_align_w         = 1.0;   // 打分权重：与车头对齐度 cosθ（越想直行，抑制无谓摆动）
+  double road_prev_w          = 0.0;   // 打分权重：与上帧 hop-1 方向一致性 cos(θ−上帧方向)；0=关闭（零回归）。
+                                       // 压扇形相邻射线边际平分时 winner 逐帧翻烙饼导致的样条抖/控制抖
+                                       //（机制同终点模式 subgoal_prev_w；仅链式第 1 跳生效）
 
   // ---- 接力前瞻（Relay Lookahead, RLA；旧称链式前瞻）+ 曲线拟合 ----
   // “看远·走近·接力 n 跳”：扇形扫描选向（看远）+ 每跳短步落点（走近）+ 接力 chain_hops 次成链。

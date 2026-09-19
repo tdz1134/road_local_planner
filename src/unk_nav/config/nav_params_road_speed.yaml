@@ -1,22 +1,24 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# unk_nav 沿路模式配置（无定位，基于栅格走廊几何推子目标）
+# unk_nav 沿路模式配置·速度前瞻版（speedloop 场景专用）
 #
-# 与 nav_params.yaml 段落顺序一致，便于 diff 对比差异。
-# 加载方式：road_follow.launch 用 config_file 私有参数把本文件路径传给 nav_node，
+# 与 nav_params_road.yaml 逐字段一致，唯一差异：lookahead_speed_k 由 0.0 改为 3.0，
+# 打开「看多深随速度」（顶速直道 L 拉长、急弯降速 L 收窄）。由
+# gen_road_world.py 的 speedloop 预设通过 road_config 让 loop_speedloop_road.launch 指向本文件。
+#
+# ⚠ 同步义务：本文件是 road 版的派生副本。改 nav_params_road.yaml 的通用项
+#   （车辆能力/感知/栅格/控制等）时，需手动同步到这里，否则两文件会漂移；
+#   仅 lookahead_speed_k 故意不同。若 params_io 新增 key，三处（types.h +
+#   params_io.cpp + 两份 road yaml）都要加，否则严格校验会 FATAL 拒启动。
+#
+# 加载方式：loop_speedloop_road.launch 用 config_file 私有参数把本文件路径传给 nav_node，
 #           由 unk::loadNavParams() 读取（不走 ROS 参数服务器）。
 #
-# 与终点模式的关键区别：
-#   · follow_road: true —— 子目标来自走廊前向扇形扫描，不读 vehicle_pose/goal
-#   · inflation_radius: 0.7 —— 走廊 6m 宽，太厚膨胀带会夹死通道
-#   · chain_hops: 4 / road_step_dist: 1.5 —— 短步多跳精细跟弯
-#
 # 格式约束（params_io.cpp 严格校验）：未知 key / 类型不对 → 启动报错退出。
-# 加参数三处同步：types.h 字段 + params_io.cpp 绑定表 + 本文件一行。
 # ═══════════════════════════════════════════════════════════════════════════
 
 # ── 1. 车辆能力（Scout v2 差速底盘）──
 v_max: 4.0                  # 最大线速度 m/s
-w_max: 1.5                  # 最大角速度 rad/s（Scout v2 仿真限速 2.0；旧值 0.8 只有 40%）
+w_max: 0.5                  # 最大角速度 rad/s（Scout v2 仿真限速 2.0；旧值 0.8 只有 40%）
 a_decel_max: 1.0            # 最大减速度 m/s²：调小=更早开始减速
 a_lat_max: 1.5              # 最大横向加速度 m/s²：高速拐角限速来源
 robot_radius: 0.46          # 车体半径 m（膨胀基准，必须真实）
@@ -25,7 +27,7 @@ robot_radius: 0.46          # 车体半径 m（膨胀基准，必须真实）
 perception_range: 20.0      # 上游局部感知栅格的范围基准 m。换感知源/换车型只改这里，其余比例自动迁移
 
 # ── 3. 栅格预处理 ──
-inflation_radius: 0.7       # 沿路走廊 6m 宽，膨胀带两侧共 1.4m，留 4.6m 通行。
+inflation_radius: 0.7       # speedloop 走廊 5.5m 宽，膨胀带两侧共 1.4m，留 4.1m 通行（与几何校验一致）。
                             # 太大（如默认 1.5）会把走廊夹死 → 无解 → RECOVERY/ABORT
 footprint_clear_radius: 0.50  # 车体足迹清空半径 m（≥robot_radius 且 <inflation_radius）。
                               # 只抹膨胀出来的格，lidar 真打到的障碍仍保持 occupied
@@ -64,7 +66,8 @@ follow_road: true           # 开启沿路：子目标来自 road_follow 前向�
 road_fan_half_deg: 75.0     # 车头前向半球扫描半角 deg（θ=0 正前方）
 road_fan_step_deg: 3.0      # 扇形角步长 deg。小=方向细腻但射线更多
 road_lookahead_ratio: 0.35  # 沿路前瞻（看多深基准）= 0.35×20 = 7.0m
-lookahead_speed_k: 0.0      # 看多深·速度增益 s：L(v)=基准+k×v，上限 perception_range；0=不随速度（零回归）。想启用高速往远看可试 2.0~4.0
+lookahead_speed_k: 3.0      # 看多深·速度增益 s：L(v)=基准+k×v，上限 perception_range。本场景专用值 3.0：
+                            # 4m/s 直道 L=7+3×4=19m（近感知上限），2.6m/s 急弯 L≈14.8m，速度剖面清晰可辨
 road_free_w: 2.0            # 自由距离权重（弯道偏向外侧长边；必须 > road_align_w）
 road_align_w: 1.0           # 车头对齐权重（抑制摆动；直路抖→↑，跟弯迟钝→↓）
 road_prev_w: 1.5            # 上帧 hop-1 方向偏好权重（迟滞防抖：压相邻射线逐帧翻烙饼）；0=关闭

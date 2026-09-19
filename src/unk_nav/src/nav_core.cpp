@@ -26,6 +26,7 @@ void NavCore::reset() {
   last_goal_ = Point2D();
   last_ = NavResult();
   have_last_bearing_ = false;
+  have_last_road_hop1_ = false;
   kappa_ema_ = 0.0;
   chain_filter_valid_ = false;
   chain_hop_count_ = 0;
@@ -129,7 +130,8 @@ NavResult NavCore::plan(const NavInput& in) {
       road::Result rr =
           p_.curve_fit_enable
               ? road::lookAheadChain(work_grid_, p_, 0.0,
-                                     std::numeric_limits<double>::quiet_NaN(), in.current_speed)
+                                     std::numeric_limits<double>::quiet_NaN(), in.current_speed,
+                                     have_last_road_hop1_ ? &last_road_hop1_bearing_ : nullptr)
               : road::lookAhead(work_grid_, p_, in.current_speed);
       sg.valid = rr.valid;
       sg.point = rr.point;
@@ -142,6 +144,14 @@ NavResult NavCore::plan(const NavInput& in) {
         goal_bearing = rr.bearing;
       }
       absorbChain(rr);
+      // 记下本帧 hop-1 方向供下帧迟滞（车体系；帧间自转 ≤ w·dt ≈ 3°，直接复用即可，
+      // 与终点模式 last_subgoal_bearing_ 同一近似）。扫描失败则作废，下帧无偏好。
+      if (rr.valid) {
+        last_road_hop1_bearing_ = rr.bearing;
+        have_last_road_hop1_ = true;
+      } else {
+        have_last_road_hop1_ = false;
+      }
     }
   } else if (in.goal_valid && !work_grid_.empty()) {
     sg = subgoal::project(work_grid_, goal_base, p_,

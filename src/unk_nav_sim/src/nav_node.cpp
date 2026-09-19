@@ -176,7 +176,11 @@ private:
     in.goal = goal_;
     // 沿路模式：不使用全局终点（NavCore 走 road_follow，忽略 goal/pose）
     in.goal_valid = params_.follow_road ? false : goal_valid_;
-    in.current_speed = current_speed_;
+    // 沿路无 odom 时用车体指令速度作车速估计（与“无定位控制层积分指令得相对位姿”同一假设），
+    // 让“看多深随速度”在无定位下也能生效；speed_valid 仍只在真有 odom 时为真，
+    // 避免拿指令速度误判前进位移棘轮（被顶住不动时指令速度仍 >0）。
+    in.current_speed = has_odom_ ? current_speed_ : last_cmd_v_;
+    last_plan_speed_ = in.current_speed;  // 供 publishChain 的 RViz 车速/看多深文本显示
     // 沿路模式前进位移棘轮依赖有效车速；无 odom 时置 false（退化为仅规划失败判定）
     in.speed_valid = has_odom_;
 
@@ -240,6 +244,7 @@ private:
     // 限幅只用于把正常行驶抹柔，绝不能拖慢「能立刻停住」这件事。
     if (!have_plan_ || ctrl_stop_) {
       slew_->reset();
+      last_cmd_v_ = 0.0;
       pub_cmd_.publish(cmd);
       return;
     }
@@ -250,6 +255,7 @@ private:
     tc = slew_->limit(tc, ctrl_dt_);
     cmd.linear.x = tc.v;
     cmd.angular.z = tc.w;
+    last_cmd_v_ = tc.v;  // 无 odom 时供 planCb 作车速估计
     pub_cmd_.publish(cmd);
     // 把这一 tick 走掉的位移记入相对位姿，供下个 tick 使用
     integrateRel(tc);
@@ -356,6 +362,8 @@ private:
   bool has_grid_ = false;
   bool goal_valid_ = false;
   double current_speed_ = 0.0;
+  double last_cmd_v_ = 0.0;       // 最近一次下发的指令线速度（无 odom 时作车速估计）
+  double last_plan_speed_ = 0.0;  // 本帧规划实际用于 lookahead 的车速（供 RViz 文本显示）
   unk::Pose2D current_pose_;
   unk::Point2D goal_;
   nav_msgs::Odometry latest_odom_;
@@ -454,6 +462,28 @@ private:
   void publishChain(const unk::NavResult& result) {
     visualization_msgs::MarkerArray arr;
     const ros::Time t = ros::Time::now();
+
+    // (id=4) 车速 + 当前看多深 L 文本：始终显示（不依赖链），直观验证“看多深随速度”。
+    // L = roadLookahead(v) = clamp(基准 + k·v, ≤ perception_range)；无 odom 时 v 取指令速度。
+    {
+      visualization_msgs::Marker sv;
+      sv.header.frame_id = "base_link";
+      sv.header.stamp = t;
+      sv.ns = "chain";
+      sv.id = 4;
+      sv.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+      sv.action = visualization_msgs::Marker::ADD;
+      sv.pose.orientation.w = 1.0;
+      sv.pose.position.z = 1.3;  // 车体上方
+      sv.scale.z = 0.5;
+      sv.color.r = 1.0; sv.color.g = 1.0; sv.color.b = 0.2; sv.color.a = 0.95;
+      const double v = last_plan_speed_;
+      const double L = params_.roadLookahead(v);
+      char sbuf[96];
+      std::snprintf(sbuf, sizeof(sbuf), "v=%.2f m/s  L=%.1f m", v, L);
+      sv.text = sbuf;
+      arr.markers.push_back(sv);
+    }
 
     // 无链（终点模式 / curve_fit 关闭 / 无有效跳点）→ 逐个 DELETE 清掉上一帧
     if (result.chain_hop_count <= 0) {

@@ -27,11 +27,14 @@ struct ScanHit {
 // ox=oy=0、heading=0 时即原 lookAhead 的扫描。
 // goal_bearing 非 NAN 时额外加 goal_align_w × cos(射线绝对方向 − goal_bearing)，
 // 用于终点模式偏向子目标方向。沿路模式传 NAN 不加该项。
+// prev_bearing 非空时额外加 road_prev_w × cos(射线绝对方向 − prev_bearing)，
+// 用于沿路第 1 跳偏好上帧方向（迟滞防抖）；接力跳传 nullptr。
 // cands != nullptr 时收集候选（bearing 记绝对角 = heading + th），并标记 selected。
 ScanHit scanFan(const GridMap& g, double ox, double oy, double heading,
                 const NavParams& p, double L, double step,
                 std::vector<NavResult::FanCandidate>* cands,
-                double goal_bearing = std::numeric_limits<double>::quiet_NaN()) {
+                double goal_bearing = std::numeric_limits<double>::quiet_NaN(),
+                const double* prev_bearing = nullptr) {
   ScanHit hit;
   const double half = p.road_fan_half_deg * kPi / 180.0;
   const double dstep = std::max(p.road_fan_step_deg, 1e-3) * kPi / 180.0;
@@ -72,6 +75,11 @@ ScanHit scanFan(const GridMap& g, double ox, double oy, double heading,
     if (has_goal) {
       const double abs_dir = geom::normalizeAngle(heading + th);
       score += p.goal_align_w * std::cos(geom::normalizeAngle(abs_dir - goal_bearing));
+    }
+    // 上帧方向偏好（迟滞）：边际平分时保持 winner 稳定；方向真变（障碍/弯道推进）时
+    // free 项差异压过本项，不会被粘住。幅度分析同 subgoal_prev_w。
+    if (prev_bearing) {
+      score += p.road_prev_w * std::cos(geom::normalizeAngle(heading + th - *prev_bearing));
     }
 
     if (score > best_score) {
@@ -132,7 +140,8 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p, double current_sp
 }
 
 Result lookAheadChain(const GridMap& work_grid, const NavParams& p,
-                      double start_heading, double goal_bearing, double current_speed) {
+                      double start_heading, double goal_bearing, double current_speed,
+                      const double* prev_hop1_bearing) {
   // 第 1 跳扫描：从 (0,0) 朝 start_heading 方向扫看多深 L，选最优方向。
   // 沿路模式 start_heading=0（车头）；终点模式可传 sg.bearing 偏朝子目标。
   // goal_bearing 非 NAN 时 scanFan 打分额外加 goal_align_w 子目标偏向项。
@@ -143,7 +152,7 @@ Result lookAheadChain(const GridMap& work_grid, const NavParams& p,
   const double step = std::max(0.5 * work_grid.resolution, 1e-6);
 
   const ScanHit first_hit = scanFan(work_grid, 0.0, 0.0, start_heading, p, L, step,
-                                     &r.candidates, goal_bearing);
+                                     &r.candidates, goal_bearing, prev_hop1_bearing);
   if (!first_hit.found) return r;
   r.bearing = geom::normalizeAngle(start_heading + first_hit.rel_bearing);
   r.reach = first_hit.reach;

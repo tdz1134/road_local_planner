@@ -68,10 +68,14 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p, double current_sp
 // goal_bearing：子目标绝对方位角 rad；非 NAN 时打分加 goal_align_w × cos(射线−goal_bearing)。
 //                沿路模式传 NAN（不加子目标项）；终点模式传 sg.bearing 偏向目标。
 // current_speed：当前车速 m/s，只影响“看多深” L=roadLookahead(v)（越快看越远）；0=不随速度（零回归）。
+// prev_hop1_bearing：上帧第 1 跳 winner 方向（车体系 rad）；非空时第 1 跳打分额外加
+//                road_prev_w × cos(射线−上帧方向)，偏好上帧方向防相邻射线逐帧翻烙饼；
+//                仅影响第 1 跳选向，接力跳与 goal_bearing 互不干扰。nullptr=关闭（零回归）。
 Result lookAheadChain(const GridMap& work_grid, const NavParams& p,
                       double start_heading = 0.0,
                       double goal_bearing = std::numeric_limits<double>::quiet_NaN(),
-                      double current_speed = 0.0);
+                      double current_speed = 0.0,
+                      const double* prev_hop1_bearing = nullptr);
 
 }  // namespace road
 }  // namespace unk

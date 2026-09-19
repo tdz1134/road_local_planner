@@ -54,6 +54,11 @@ class NavCore {
   double last_subgoal_bearing_ = 0.0;
   bool   have_last_bearing_ = false;
 
+  // 沿路 hop-1 方向滞后（同一机制）：存上帧链式第 1 跳 winner 方向（车体系），
+  // 传给 lookAheadChain 的 prev_hop1_bearing；road_prev_w=0 时传与不传行为一致。
+  double last_road_hop1_bearing_ = 0.0;
+  bool   have_last_road_hop1_ = false;
+
   // 链式前瞻曲率 κ 的跨帧 EMA 滤波：扇形 3° 量化让 κ 逐帧抖动，一阶低通压噪。
   // 链截断（hop_count<2）或子目标无效时作废 → 本帧走直线。
   // 拟合切向不再单独滤波：曲线由 fitSpline 直接过 hops 各跳点，切向来自相邻点差分。
