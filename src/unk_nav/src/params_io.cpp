@@ -76,6 +76,7 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"road_free_w", kDouble, &p->road_free_w},
       {"road_align_w", kDouble, &p->road_align_w},
       {"road_prev_w", kDouble, &p->road_prev_w},
+      {"road_prev_dyaw_comp", kBool, &p->road_prev_dyaw_comp},
       {"road_topk", kInt, &p->road_topk},
       {"road_commit_margin", kDouble, &p->road_commit_margin},
       // 链式前瞻 + 曲线拟合（两种模式共用）

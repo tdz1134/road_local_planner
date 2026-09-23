@@ -128,11 +128,19 @@ NavResult NavCore::plan(const NavInput& in) {
       // 接力前瞻：第 1 跳与单跳完全一致，额外量出落点切向与前方曲率；
       // 曲线拟合关闭时不做链（省算力，行为与旧版逐字节一致）。
       // in.current_speed 仅用于“看多深”随速度放大（lookahead_speed_k=0 时不生效）。
+      // 帧间 Δyaw 补偿：上帧 hop-1 bearing 存于「上帧车体系」，车转过 in.delta_yaw 后
+      // 同一物理方向在当前系里偏了 −Δyaw，比较前先旋回来，免得入弯时 road_prev_w 偏好指歪。
+      const double prev_hop1_cur = geom::normalizeAngle(
+          last_road_hop1_bearing_ - (p_.road_prev_dyaw_comp ? in.delta_yaw : 0.0));
+      const double* prev_hop1_ptr =
+          have_last_road_hop1_ ? (p_.road_prev_dyaw_comp ? &prev_hop1_cur
+                                                          : &last_road_hop1_bearing_)
+                               : nullptr;
       road::Result rr =
           p_.curve_fit_enable
               ? road::lookAheadChain(work_grid_, p_, 0.0,
                                      std::numeric_limits<double>::quiet_NaN(), in.current_speed,
-                                     have_last_road_hop1_ ? &last_road_hop1_bearing_ : nullptr,
+                                     prev_hop1_ptr,
                                      p_.road_topk > 1 ? &road_commit_ : nullptr)
               : road::lookAhead(work_grid_, p_, in.current_speed);
       sg.valid = rr.valid;
@@ -146,8 +154,8 @@ NavResult NavCore::plan(const NavInput& in) {
         goal_bearing = rr.bearing;
       }
       absorbChain(rr);
-      // 记下本帧 hop-1 方向供下帧迟滞（车体系；帧间自转 ≤ w·dt ≈ 3°，直接复用即可，
-      // 与终点模式 last_subgoal_bearing_ 同一近似）。扫描失败则作废，下帧无偏好。
+      // 记下本帧 hop-1 方向供下帧迟滞（始存于当前车体系，下帧读取时再按 Δyaw 旋回）。
+      // 扫描失败则作废，下帧无偏好。
       if (rr.valid) {
         last_road_hop1_bearing_ = rr.bearing;
         have_last_road_hop1_ = true;

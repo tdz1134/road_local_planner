@@ -68,6 +68,7 @@ lookahead_speed_k: 0.0      # 看多深·速度增益 s：L(v)=基准+k×v，上
 road_free_w: 2.0            # 自由距离权重（弯道偏向外侧长边；必须 > road_align_w）
 road_align_w: 1.0           # 车头对齐权重（抑制摆动；直路抖→↑，跟弯迟钝→↓）
 road_prev_w: 2.5            # 上帧 hop-1 方向偏好权重（迟滞防抖：压相邻射线逐帧翻烙饼）；0=关闭
+road_prev_dyaw_comp: true   # 迟滞读取前把上帧 hop-1 方向按帧间 Δyaw 旋到当前车体系再比（治入弯残余抖动）；false=旧行为
 road_topk: 1                # Top-K 多链候选数（1=关闭零回归，建议 3~4）
 road_commit_margin: 0.10    # 承诺换链裕度：挑战链分数须超出承诺链 (1+margin) 倍才切换
 

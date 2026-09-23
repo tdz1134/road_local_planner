@@ -183,6 +183,10 @@ private:
     last_plan_speed_ = in.current_speed;  // 供 publishChain 的 RViz 车速/看多深文本显示
     // 沿路模式前进位移棘轮依赖有效车速；无 odom 时置 false（退化为仅规划失败判定）
     in.speed_valid = has_odom_;
+    // 帧间车体自转角 Δyaw：供沿路 road_prev_w 迟滞把上帧方向旋到当前系。
+    // 有 odom 用实测位姿差、无 odom 用指令积分（currentCarInPlanFrame 已兼顾）。
+    // 取本帧规划前的值（rel_/plan_pose_ 锚点在本 planCb 末尾才重置）。
+    in.delta_yaw = currentCarInPlanFrame().yaw;
 
     // OccupancyGrid → unk::GridMap（字段一一对应，直接拷贝）
     in.local_grid = convertGrid(latest_grid_);

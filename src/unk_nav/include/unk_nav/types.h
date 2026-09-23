@@ -267,6 +267,9 @@ struct NavParams {
   double road_prev_w          = 0.0;   // 打分权重：与上帧 hop-1 方向一致性 cos(θ−上帧方向)；0=关闭（零回归）。
                                        // 压扇形相邻射线边际平分时 winner 逐帧翻烙饼导致的样条抖/控制抖
                                        //（机制同终点模式 subgoal_prev_w；仅链式第 1 跳生效）
+  bool   road_prev_dyaw_comp  = true;  // 沿路迟滞比较前，先把上帧 hop-1 bearing 按帧间 Δyaw 旋到当前车体系再比；
+                                       // 消除入弯车体自转让 road_prev_w 偏好指歪的残余抖动。false=旧行为（不补偿）。
+                                       // delta_yaw=0（直路/单测未置）时等价 false，零回归。
   int    road_topk            = 1;     // Top-K 多链候选数（hop-1 取 K 个种子方向各自长链，链级评分选优）；
                                        // 1=关闭（零回归，退化为单链+prev_w 迟滞）；建议 3~4
   double road_commit_margin   = 0.10;  // 承诺换链裕度：挑战链总分须超过承诺链 (1+margin) 倍才切换；
@@ -319,6 +322,9 @@ struct NavInput {
   // false（如无定位又不接里程计）时该判定退化为仅「规划连续失败」检测。默认 true，
   // 保持终点模式与既有单测行为不变。
   bool speed_valid = true;
+  // 帧间车体偏航增量 Δyaw（rad，当前规划帧相对上一帧的车头自转角，已 normalizeAngle）。
+  // 沿路 road_prev_w 迟滞用它把上帧 hop-1 方向旋到当前系再比较；默认 0 = 不补偿（零回归）。
+  double delta_yaw = 0.0;
 };
 
 // 单周期输出
