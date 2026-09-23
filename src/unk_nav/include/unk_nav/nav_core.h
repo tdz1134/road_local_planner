@@ -9,11 +9,10 @@
 #include <string>
 
 #include "unk_nav/behavior_fsm.h"
+#include "unk_nav/road_follow.h"
 #include "unk_nav/types.h"
 
 namespace unk {
-
-namespace road { struct Result; }  // forward decl
 
 class NavCore {
  public:
@@ -58,6 +57,9 @@ class NavCore {
   // 传给 lookAheadChain 的 prev_hop1_bearing；road_prev_w=0 时传与不传行为一致。
   double last_road_hop1_bearing_ = 0.0;
   bool   have_last_road_hop1_ = false;
+
+  // Top-K+承诺链状态：road_topk>1 时启用多链候选+承诺切换。
+  road::ChainCommitState road_commit_;
 
   // 链式前瞻曲率 κ 的跨帧 EMA 滤波：扇形 3° 量化让 κ 逐帧抖动，一阶低通压噪。
   // 链截断（hop_count<2）或子目标无效时作废 → 本帧走直线。

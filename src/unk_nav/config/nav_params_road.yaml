@@ -67,7 +67,9 @@ road_lookahead_ratio: 0.35  # 沿路前瞻（看多深基准）= 0.35×20 = 7.0m
 lookahead_speed_k: 0.0      # 看多深·速度增益 s：L(v)=基准+k×v，上限 perception_range；0=不随速度（零回归）。想启用高速往远看可试 2.0~4.0
 road_free_w: 2.0            # 自由距离权重（弯道偏向外侧长边；必须 > road_align_w）
 road_align_w: 1.0           # 车头对齐权重（抑制摆动；直路抖→↑，跟弯迟钝→↓）
-road_prev_w: 1.5            # 上帧 hop-1 方向偏好权重（迟滞防抖：压相邻射线逐帧翻烙饼）；0=关闭
+road_prev_w: 2.5            # 上帧 hop-1 方向偏好权重（迟滞防抖：压相邻射线逐帧翻烙饼）；0=关闭
+road_topk: 1                # Top-K 多链候选数（1=关闭零回归，建议 3~4）
+road_commit_margin: 0.10    # 承诺换链裕度：挑战链分数须超出承诺链 (1+margin) 倍才切换
 
 # ── 7. 速度规划（制动包络：v 必须能在视距内刹住）──
 safety_margin: 0.3          # 附加安全距离 m：调大=更早减速
@@ -81,7 +83,7 @@ stuck_dist: 0.1             # 推进阈值 m（< v_max×stuck_time = 7.5m，余�
 recovery_max_retry: 3       # 重试上限，超过 → ABORT 停车交还决策权
 
 # ── 9. 控制器（PurePursuitController）──
-pursuit_lookahead: 0.8      # 纯跟踪前视点距离 m。小=贴线紧但抖，大=平滑但切内角
+pursuit_lookahead: 1.2      # 纯跟踪前视点距离 m。小=贴线紧但抖，大=平滑但切内角
 control_freq: 50.0          # 控制环频率 Hz（与 plan_freq 解耦）。<=0=不拆环。
                             # 沿路无 odom 时控制层靠积分指令得相对位姿
 cmd_a_max: 3.0              # 线速度指令斜率限幅 m/s²

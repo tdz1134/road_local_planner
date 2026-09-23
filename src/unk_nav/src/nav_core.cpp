@@ -27,6 +27,7 @@ void NavCore::reset() {
   last_ = NavResult();
   have_last_bearing_ = false;
   have_last_road_hop1_ = false;
+  road_commit_.valid = false;
   kappa_ema_ = 0.0;
   chain_filter_valid_ = false;
   chain_hop_count_ = 0;
@@ -131,7 +132,8 @@ NavResult NavCore::plan(const NavInput& in) {
           p_.curve_fit_enable
               ? road::lookAheadChain(work_grid_, p_, 0.0,
                                      std::numeric_limits<double>::quiet_NaN(), in.current_speed,
-                                     have_last_road_hop1_ ? &last_road_hop1_bearing_ : nullptr)
+                                     have_last_road_hop1_ ? &last_road_hop1_bearing_ : nullptr,
+                                     p_.road_topk > 1 ? &road_commit_ : nullptr)
               : road::lookAhead(work_grid_, p_, in.current_speed);
       sg.valid = rr.valid;
       sg.point = rr.point;

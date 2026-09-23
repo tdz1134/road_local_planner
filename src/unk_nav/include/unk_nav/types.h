@@ -267,6 +267,10 @@ struct NavParams {
   double road_prev_w          = 0.0;   // 打分权重：与上帧 hop-1 方向一致性 cos(θ−上帧方向)；0=关闭（零回归）。
                                        // 压扇形相邻射线边际平分时 winner 逐帧翻烙饼导致的样条抖/控制抖
                                        //（机制同终点模式 subgoal_prev_w；仅链式第 1 跳生效）
+  int    road_topk            = 1;     // Top-K 多链候选数（hop-1 取 K 个种子方向各自长链，链级评分选优）；
+                                       // 1=关闭（零回归，退化为单链+prev_w 迟滞）；建议 3~4
+  double road_commit_margin   = 0.10;  // 承诺换链裕度：挑战链总分须超过承诺链 (1+margin) 倍才切换；
+                                       // 仅 road_topk>1 时生效。0=无裕度（等于普通 argmax），一般 0.05~0.20
 
   // ---- 接力前瞻（Relay Lookahead, RLA；旧称链式前瞻）+ 曲线拟合 ----
   // “看远·走近·接力 n 跳”：扇形扫描选向（看远）+ 每跳短步落点（走近）+ 接力 chain_hops 次成链。

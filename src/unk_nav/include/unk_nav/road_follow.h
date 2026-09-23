@@ -41,6 +41,15 @@
 namespace unk {
 namespace road {
 
+// Top-K+承诺链状态（跨帧持久化，由 NavCore 持有并传入 lookAheadChain）。
+// 存储上一帧被承诺的链的每跳绝对 bearing，用于链级一致性评估和裕度判定。
+struct ChainCommitState {
+  double bearings[16] = {};   // 承诺链各跳的绝对 bearing rad
+  int    hop_count  = 0;      // 承诺链跳数
+  double score      = 0.0;    // 上帧承诺链的总分（用于本帧裕度比较的基准，实际由重新生长得到）
+  bool   valid      = false;  // 是否有有效承诺链（首帧 / reset 后 false）
+};
+
 struct Result {
   Point2D point;                     // 前瞻子目标，车体系（base_link）
   bool valid = false;                // 是否找到可通行的前向（全被堵则 false）
@@ -71,11 +80,14 @@ Result lookAhead(const GridMap& work_grid, const NavParams& p, double current_sp
 // prev_hop1_bearing：上帧第 1 跳 winner 方向（车体系 rad）；非空时第 1 跳打分额外加
 //                road_prev_w × cos(射线−上帧方向)，偏好上帧方向防相邻射线逐帧翻烙饼；
 //                仅影响第 1 跳选向，接力跳与 goal_bearing 互不干扰。nullptr=关闭（零回归）。
+// commit：Top-K+承诺状态（in/out）；road_topk>1 且 commit 非空时启用多链候选+承诺切换；
+//         road_topk<=1 时此参数被忽略（走旧链路，仅 prev_hop1_bearing 迟滞）。nullptr=关闭。
 Result lookAheadChain(const GridMap& work_grid, const NavParams& p,
                       double start_heading = 0.0,
                       double goal_bearing = std::numeric_limits<double>::quiet_NaN(),
                       double current_speed = 0.0,
-                      const double* prev_hop1_bearing = nullptr);
+                      const double* prev_hop1_bearing = nullptr,
+                      ChainCommitState* commit = nullptr);
 
 }  // namespace road
 }  // namespace unk

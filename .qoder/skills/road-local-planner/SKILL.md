@@ -17,14 +17,18 @@ description: 差速底盘沿路路径规划系统（rlp_*）架构与设计规�
 |---|---|---|
 | 场景 | **有道路先验**的沿路规划 | **无道路先验**的未知环境局部反应式导航 |
 | 输入 | 栅格 + 左右边界 + 定位质量 + 终点 | 栅格 + 位姿 + 车速 + 终点（无边界/走廊概念） |
-| 主流程 | 边界状态机 → 走廊 → 模式路由 → 候选/搜索 → 代价 | 子目标投影 → 局部 A\*（障碍距离软代价 + 上帧路径一致性软代价 + tie-break）→ 平滑 → 限速 → 行为 FSM（+ 纯跟踪控制） |
+| 主流程 | 边界状态机 → 走廊 → 模式路由 → 候选/搜索 → 代价 | 10Hz 重规划：子目标选取（扇形打分+方向迟滞）→ 链式前瞻跳点 → Catmull-Rom 样条（或直线）→ 限速（limit_by 诊断）→ 行为 FSM；50Hz PurePursuit+斜率限幅出 /cmd_vel（A\*/平滑保留为库，主链路已不调用） |
 | 配置 | `rlp_node/config/params.yaml`，rosparam 加载 | `unk_nav/config/nav_params.yaml`（归算法层），经 `params_io::loadNavParams` 读，**不走 rosparam** |
 | 依赖 | 无 ROS 内核 + `rlp_node` ROS 壳 | 纯 C++14 + yaml-cpp（仅 `params_io` 一处），核心零 ROS；`unk_nav_sim` 为 ROS/Gazebo 胶水层 |
 
-改 `unk_nav` 前先看 `src/unk_nav/README.md`（本 skill 不展开其细节）。要点：
-- **加参数三处同步**：`types.h::NavParams` 字段 + `params_io.cpp` 绑定表 + yaml 一行；未知 key / 类型错直接拒绝启动。
-- **能力边界**：凸障碍可绕；凹槽深于前瞻（`lookahead_ratio × sensor_range`）会落入局部极小 → RECOVERY → ABORT（绕行/脱困已明确排除在范围外）。
-- **沿路模式**（`follow_road=true`）：去掉全局定位依赖，用栅格走廊几何（车头前向半球扇形扫描）推子目标；数据流只换子目标来源，A\*/平滑/限速/控制全部复用。无定位时开此模式，有定位时用原始终点导航，`follow_road` 开关切换（当前为手动配置切换）。能力边界：横贯全路的封堵、路口转向、仅凭划线定义的道路（激光不可见）不在范围。
+改 `unk_nav` 前先看 `src/unk_nav/README.md`（本 skill 不展开其细节）。现状要点：
+
+- **加参数三处同步**：`types.h::NavParams` 字段 + `params_io.cpp` 绑定表 + yaml 一行（沿路有两份 yaml：`nav_params_road.yaml` / `nav_params_road_speed.yaml`，键集必须一致）；未知 key / 类型错直接拒绝启动。**params_io 还有跨字段取值约束（如 `footprint_clear_radius < inflation_radius`），任一违反 FATAL 拒启动；core_test 不加载真实 yaml，单测全绿 ≠ 配置可用，改完 yaml 必须人工复跑全部约束**。
+- **能力边界**：凸障碍可绕；凹槽深于前瞻（`lookahead_ratio × perception_range`）落入局部极小 → RECOVERY → ABORT（绕行/脱困排除在范围外）。沿路走廊封死场景仍有 1 条已知 FSM 回归失败（单测基线 329 过 / 1 已知失败）。
+- **两种模式**：终点模式 `subgoal::project` 单射线投影、被截断才展扇形候选（车头朝向居中，打分 = 终点对齐 + 饱和自由距离 + `subgoal_prev_w` 迟滞），另有 `stop_horizon` 停车视距限速、`goal_clear_radius` 终点清洞默认关；沿路模式（`follow_road=true`）无全局定位，`road_follow::lookAheadChain` 链式前瞻（RLA）逐跳 `scanFan`（打分 = free + 对齐 cosθ + 可选 goal_align + `road_prev_w` hop-1 方向迟滞），跳点串成 Catmull-Rom 弦长参数化样条（`curve_fit_enable=false` 退回直线）。
+- **看多深与速度耦合**：基准 `road_lookahead_ratio × perception_range`，`L(v) = 基准 + lookahead_speed_k·v`（上限 perception_range；k=0 零回归）；“走多近”由 `chain_hops × step_walk` 定，与“看多深”解耦。
+- **无 /odom 环境事实**：`scout_skid_steer_controller` 不发布 /odom，沿路模式 `localization_node` 也是关的 → nav_node 用最近下发指令速度估计 `current_speed`（`speed_valid` 仅真有 odom 时为真），改速度相关逻辑时别假设有真 odom。
+- **诊断与工具**：`/unk_nav/state`（含 `limit_by=`、curve 标记）、`/unk_nav/chain` 扇形可视化（蓝线长 = min(L, 到墙自由距离)，附 v/L 文本）；丝滑度分析用 `scripts/plot_cmd_vel.py 120`（判读基准：换向 <5 次/分且无 <0.3s 微换向 = 丝滑）；高速环路场景 `loop_speedloop_road.launch`。
 
 ## 四层架构
 

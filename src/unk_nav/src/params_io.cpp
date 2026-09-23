@@ -76,6 +76,8 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"road_free_w", kDouble, &p->road_free_w},
       {"road_align_w", kDouble, &p->road_align_w},
       {"road_prev_w", kDouble, &p->road_prev_w},
+      {"road_topk", kInt, &p->road_topk},
+      {"road_commit_margin", kDouble, &p->road_commit_margin},
       // 链式前瞻 + 曲线拟合（两种模式共用）
       {"chain_hops", kInt, &p->chain_hops},
       {"road_step_dist", kDouble, &p->road_step_dist},
@@ -179,6 +181,10 @@ bool loadNavParams(const std::string& yaml_path, NavParams* out,
     problems.push_back("lookahead_speed_k must be >= 0 (0 = speed-independent lookahead)");
   if (out->road_prev_w < 0.0)
     problems.push_back("road_prev_w must be >= 0 (0 = no previous-frame hysteresis)");
+  if (out->road_topk < 1 || out->road_topk > 8)
+    problems.push_back("road_topk must be in [1, 8]");
+  if (out->road_commit_margin < 0.0)
+    problems.push_back("road_commit_margin must be >= 0");
 
   if (!problems.empty()) {
     if (err != nullptr) {
