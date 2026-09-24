@@ -204,6 +204,8 @@ struct NavParams {
   double subgoal_align_w    = 3.0;      // 终点对齐权重 cos(θ-θ_goal)；必须 > subgoal_free_w
   double subgoal_free_w     = 1.0;      // 饱和自由距离权重（饱和参考 = lookahead）
   double subgoal_prev_w     = 1.0;      // 上帧方向一致性权重；0=关闭滞后
+  bool   subgoal_prev_dyaw_comp = true; // 终点模式迟滞：比较前把上帧子目标 bearing 按帧间 Δyaw 旋到当前车体系再比（与沿路对称）；
+                                        // delta_yaw=0 时等价关，零回归
   double subgoal_clearance  = 0.3;      // 截断时子目标与膨胀带边缘的净空 m；0=复现旧行为
   double goal_clear_radius  = 0.0;      // 终点清洞半径 m；0=关闭（终点贴墙场景才需要）
 

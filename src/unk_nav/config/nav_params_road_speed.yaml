@@ -48,6 +48,7 @@ subgoal_fan_step_deg: 5.0   # 扇形角步长 deg
 subgoal_align_w: 3.0        # 终点对齐权重（沿路不读）
 subgoal_free_w: 1.0         # 自由距离权重（沿路不读）
 subgoal_prev_w: 1.0         # 上帧一致性权重（沿路不读）
+subgoal_prev_dyaw_comp: true  # 终点模式迟滞：上帧子目标方向按帧间 Δyaw 旋到当前系再比（与沿路对称）；false=旧行为
 subgoal_clearance: 0.3      # 净空 m（沿路不读）
 
 # ── 5. 链式前瞻 + 曲线拟合（沿路模式的核心增强）──

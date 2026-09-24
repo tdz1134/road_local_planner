@@ -164,8 +164,15 @@ NavResult NavCore::plan(const NavInput& in) {
       }
     }
   } else if (in.goal_valid && !work_grid_.empty()) {
-    sg = subgoal::project(work_grid_, goal_base, p_,
-                          have_last_bearing_ ? &last_subgoal_bearing_ : nullptr);
+    // 帧间 Δyaw 补偿（与沿路 road_prev_w 同构）：last_subgoal_bearing_ 存于上帧车体系，
+    // 车转过 in.delta_yaw 后同一方向在当前系里偏了 −Δyaw，比较前先旋回来。
+    const double prev_subgoal_cur = geom::normalizeAngle(
+        last_subgoal_bearing_ - (p_.subgoal_prev_dyaw_comp ? in.delta_yaw : 0.0));
+    const double* prev_subgoal_ptr =
+        have_last_bearing_
+            ? (p_.subgoal_prev_dyaw_comp ? &prev_subgoal_cur : &last_subgoal_bearing_)
+            : nullptr;
+    sg = subgoal::project(work_grid_, goal_base, p_, prev_subgoal_ptr);
     // 终点模式链式前瞻：用 goal_bearing 偏向子目标方向，得到跳点供样条拟合。
     if (sg.valid && p_.curve_fit_enable) {
       road::Result rr = road::lookAheadChain(work_grid_, p_, 0.0, goal_bearing, in.current_speed);

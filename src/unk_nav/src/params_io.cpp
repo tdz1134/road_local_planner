@@ -46,6 +46,7 @@ std::vector<Binding> makeBindings(NavParams* p) {
       {"subgoal_align_w", kDouble, &p->subgoal_align_w},
       {"subgoal_free_w", kDouble, &p->subgoal_free_w},
       {"subgoal_prev_w", kDouble, &p->subgoal_prev_w},
+      {"subgoal_prev_dyaw_comp", kBool, &p->subgoal_prev_dyaw_comp},
       {"subgoal_clearance", kDouble, &p->subgoal_clearance},
       {"goal_clear_radius", kDouble, &p->goal_clear_radius},
       {"plan_freq", kDouble, &p->plan_freq},
